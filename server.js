@@ -2,28 +2,36 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const admin = require('firebase-admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET_KEY = process.env.SECRET_KEY || 'YOUR_SECRET_KEY';
 
+// Firebase Setup
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log("Firebase Admin initialized successfully.");
+    } catch (e) {
+        console.error("Error parsing FIREBASE_SERVICE_ACCOUNT:", e);
+    }
+} else {
+    console.warn("FIREBASE_SERVICE_ACCOUNT not found. Firestore will not work.");
+}
+
+const db = admin.firestore();
+
 app.use(cors());
 app.use(bodyParser.json());
-
-// Mock Database
-let wallet = {
-    balance: 1000.00,
-    transactions: [
-        { id: 1, type: 'Deposit', amount: 500.00, date: new Date().toISOString(), status: 'Success' },
-        { id: 2, type: 'Withdraw', amount: 200.00, date: new Date().toISOString(), status: 'Success' }
-    ]
-};
 
 // Middleware for JWT Verification
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-
     if (!token) return res.sendStatus(401);
 
     jwt.verify(token, SECRET_KEY, (err, user) => {
@@ -33,76 +41,150 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const isAdmin = (req, res, next) => {
+    if (req.user.phoneNumber === 'admin') next();
+    else res.sendStatus(403);
+};
+
 // --- API ENDPOINTS ---
 
-// Login (Mock OTP)
-app.post('/api/login', (req, res) => {
+// Login & User Initialization
+app.post('/api/login', async (req, res) => {
     const { phoneNumber, otp } = req.body;
-    if (phoneNumber && otp === '1234') { // Mock OTP check
-        const token = jwt.sign({ phoneNumber }, SECRET_KEY, { expiresIn: '1h' });
-        res.json({ token });
+    if (phoneNumber && (otp === '1234' || (phoneNumber === 'admin' && otp === 'admin'))) {
+        try {
+            const userRef = db.collection('users').doc(phoneNumber);
+            const doc = await userRef.get();
+
+            if (!doc.exists) {
+                await userRef.set({ balance: 0.0, phoneNumber: phoneNumber });
+            }
+
+            const token = jwt.sign({ phoneNumber }, SECRET_KEY, { expiresIn: '24h' });
+            res.json({ token });
+        } catch (e) {
+            res.status(500).json({ message: 'Database error', error: e.message });
+        }
     } else {
         res.status(400).json({ message: 'Invalid phone or OTP' });
     }
 });
 
 // Get Balance
-app.get('/api/balance', authenticateToken, (req, res) => {
-    res.json({ balance: wallet.balance });
+app.get('/api/balance', authenticateToken, async (req, res) => {
+    try {
+        const userDoc = await db.collection('users').doc(req.user.phoneNumber).get();
+        res.json({ balance: userDoc.data()?.balance || 0.0 });
+    } catch (e) {
+        res.status(500).json({ message: 'Database error' });
+    }
 });
 
-// Get Transactions
-app.get('/api/transactions', authenticateToken, (req, res) => {
-    res.json(wallet.transactions);
+// Get Transactions (User specific)
+app.get('/api/transactions', authenticateToken, async (req, res) => {
+    try {
+        const snapshot = await db.collection('transactions')
+            .where('userId', '==', req.user.phoneNumber)
+            .orderBy('date', 'desc')
+            .get();
+        const transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        res.json(transactions);
+    } catch (e) {
+        res.status(500).json({ message: 'Database error' });
+    }
 });
 
-// Deposit (Zaad Placeholder)
-app.post('/api/deposit', authenticateToken, (req, res) => {
-    const { phoneNumber, amount, referenceId } = req.body;
+// Transaction Requests (Unified for all 4 buttons)
+app.post('/api/transaction/request', authenticateToken, async (req, res) => {
+    const { type, amount, details } = req.body;
     const numAmount = parseFloat(amount);
 
     if (numAmount <= 0) return res.status(400).json({ message: 'Invalid amount' });
 
-    // Simulate Zaad API call
-    console.log(`Calling ZAAD_API_PLACEHOLDER for ${phoneNumber} with amount ${numAmount}`);
+    try {
+        const newTx = {
+            userId: req.user.phoneNumber,
+            type: type,
+            amount: numAmount,
+            details: details || {},
+            date: new Date().toISOString(),
+            status: 'PENDING'
+        };
 
-    wallet.balance += numAmount;
-    const newTransaction = {
-        id: wallet.transactions.length + 1,
-        type: 'Deposit',
-        amount: numAmount,
-        date: new Date().toISOString(),
-        status: 'Success'
-    };
-    wallet.transactions.unshift(newTransaction);
-
-    res.json({ message: 'Deposit successful', balance: wallet.balance });
+        const docRef = await db.collection('transactions').add(newTx);
+        res.json({ message: 'Request submitted', id: docRef.id });
+    } catch (e) {
+        res.status(500).json({ message: 'Database error' });
+    }
 });
 
-// Withdraw (1xBet Placeholder)
-app.post('/api/withdraw', authenticateToken, (req, res) => {
-    const { accountId, amount } = req.body;
-    const numAmount = parseFloat(amount);
+// Admin: Get All Transactions
+app.get('/api/admin/transactions', authenticateToken, isAdmin, async (req, res) => {
+    try {
+        const snapshot = await db.collection('transactions').orderBy('date', 'desc').get();
+        const transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        res.json(transactions);
+    } catch (e) {
+        res.status(500).json({ message: 'Database error' });
+    }
+});
 
-    if (numAmount <= 0) return res.status(400).json({ message: 'Invalid amount' });
-    if (numAmount > wallet.balance) return res.status(400).json({ message: 'Insufficient balance' });
+// Admin: Update Transaction Status (Approve/Reject)
+app.post('/api/admin/transaction/status', authenticateToken, isAdmin, async (req, res) => {
+    const { transactionId, status } = req.body;
+    try {
+        const txRef = db.collection('transactions').doc(transactionId);
+        const txDoc = await txRef.get();
 
-    // Simulate 1xBet API call
-    console.log(`Calling 1XBET_API_PLACEHOLDER for account ${accountId} with amount ${numAmount}`);
+        if (!txDoc.exists) return res.status(404).json({ message: 'Transaction not found' });
+        if (txDoc.data().status !== 'PENDING') return res.status(400).json({ message: 'Transaction already processed' });
 
-    wallet.balance -= numAmount;
-    const newTransaction = {
-        id: wallet.transactions.length + 1,
-        type: 'Withdraw',
-        amount: numAmount,
-        date: new Date().toISOString(),
-        status: 'Success'
-    };
-    wallet.transactions.unshift(newTransaction);
+        const txData = txDoc.data();
+        const userRef = db.collection('users').doc(txData.userId);
 
-    res.json({ message: 'Withdrawal successful', balance: wallet.balance });
+        await db.runTransaction(async (t) => {
+            if (status === 'APPROVED') {
+                const userDoc = await t.get(userRef);
+                let currentBalance = userDoc.data().balance || 0;
+
+                // Logic:
+                // Deposits (Intake): "Kasoo Dir Zaad", "Kala Soo Bax 1xBet" -> ADD to balance
+                // Withdrawals (Outtake): "Ku Shubo 1xBet", "Ku Dirso Zaadkaaga" -> SUBTRACT from balance
+                if (txData.type === "Kasoo Dir Zaad" || txData.type === "Kala Soo Bax 1xBet") {
+                    t.update(userRef, { balance: currentBalance + txData.amount });
+                } else if (txData.type === "Ku Shubo 1xBet" || txData.type === "Ku Dirso Zaadkaaga") {
+                    if (currentBalance < txData.amount) throw new Error("Insufficient balance");
+                    t.update(userRef, { balance: currentBalance - txData.amount });
+                }
+            }
+            t.update(txRef, { status: status });
+        });
+
+        res.json({ message: `Transaction ${status.toLowerCase()}` });
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+});
+
+// App Configuration
+app.get('/api/config', async (req, res) => {
+    try {
+        const configDoc = await db.collection('config').doc('app').get();
+        res.json(configDoc.data() || { whatsapp: "+252...", instructions: "Default instructions" });
+    } catch (e) {
+        res.status(500).json({ message: 'Error fetching config' });
+    }
+});
+
+app.post('/api/admin/config', authenticateToken, isAdmin, async (req, res) => {
+    try {
+        await db.collection('config').doc('app').set(req.body, { merge: true });
+        res.json({ message: 'Config updated' });
+    } catch (e) {
+        res.status(500).json({ message: 'Error updating config' });
+    }
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
