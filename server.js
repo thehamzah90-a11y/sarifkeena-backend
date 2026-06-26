@@ -29,6 +29,7 @@ app.use(bodyParser.json());
 
 // Helper: Extract last 9 digits (e.g., 633044004)
 const getLocalNumber = (phone) => {
+    if (!phone) return "";
     const clean = phone.replace(/\s/g, '');
     return clean.length >= 9 ? clean.slice(-9) : clean;
 };
@@ -56,6 +57,7 @@ app.get('/', (req, res) => res.send("🚀 Sarifkeenna Backend Ultimate is Live!"
 
 app.post('/api/login', async (req, res) => {
     const { phoneNumber, password, mode } = req.body;
+    const localPhone = getLocalNumber(phoneNumber);
 
     // SECURE ADMIN LOGIN
     const secureAdminPassword = process.env.ADMIN_PASSWORD || 'Habo3290';
@@ -64,11 +66,13 @@ app.post('/api/login', async (req, res) => {
         return res.json({ token, uid: 'ADMIN' });
     }
 
-    if (localPhone.length !== 9) {
+    if (localPhone.length < 9) {
         return res.status(400).json({ message: "Fadlan dhameystir nambarka (9 digits required)." });
     }
 
     try {
+        if (!db) return res.status(500).json({ message: "Database connected failed." });
+
         const userRef = db.ref('users/' + localPhone);
         const snapshot = await userRef.once('value');
         const user = snapshot.val();
@@ -94,7 +98,10 @@ app.post('/api/login', async (req, res) => {
             const token = jwt.sign({ phoneNumber: localPhone, uid: user.uid }, SECRET_KEY, { expiresIn: '30d' });
             return res.json({ token, uid: user.uid });
         }
-    } catch (e) { res.status(500).json({ message: e.message }); }
+    } catch (e) {
+        console.error("Login Error:", e.message);
+        res.status(500).json({ message: e.message });
+    }
 });
 
 app.get('/api/balance', authenticateToken, async (req, res) => {
@@ -191,20 +198,22 @@ app.post('/api/admin/transaction/status', authenticateToken, isAdmin, async (req
 });
 
 app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => {
-    const today = new Date().toISOString().split('T')[0];
-    const txSnap = await db.ref('transactions').once('value');
-    const usersSnap = await db.ref('users').once('value');
-    const txs = txSnap.val() || {};
-    const users = usersSnap.val() || {};
-    let dep = 0, withdr = 0, news = 0;
-    Object.values(txs).forEach(t => {
-        if(t.date.startsWith(today) && t.status === 'APPROVED') {
-            if(t.type.includes("Dir") || t.type.includes("Bax")) dep += t.amount;
-            else withdr += t.amount;
-        }
-    });
-    Object.values(users).forEach(u => { if(u.createdAt && u.createdAt.startsWith(today)) news++; });
-    res.json({ totalDeposits: dep, totalWithdrawals: withdr, newUsersToday: news });
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const txSnap = await db.ref('transactions').once('value');
+        const usersSnap = await db.ref('users').once('value');
+        const txs = txSnap.val() || {};
+        const users = usersSnap.val() || {};
+        let dep = 0, withdr = 0, news = 0;
+        Object.values(txs).forEach(t => {
+            if(t.date.startsWith(today) && t.status === 'APPROVED') {
+                if(t.type === "Kasoo Dir Zaad" || t.type === "Kala Soo Bax 1xBet") dep += t.amount;
+                else withdr += t.amount;
+            }
+        });
+        Object.values(users).forEach(u => { if(u.createdAt && u.createdAt.startsWith(today)) news++; });
+        res.json({ totalDeposits: dep, totalWithdrawals: withdr, newUsersToday: news });
+    } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.get('/api/config', async (req, res) => {
