@@ -3,7 +3,6 @@ const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const admin = require('firebase-admin');
-const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -28,6 +27,12 @@ try {
 app.use(cors());
 app.use(bodyParser.json());
 
+// Helper: Extract last 9 digits starting with 6
+const getLocalNumber = (phone) => {
+    const clean = phone.replace(/\D/g, '');
+    return clean.length >= 9 ? clean.slice(-9) : clean;
+};
+
 // --- AUTH ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -45,40 +50,42 @@ const isAdmin = (req, res, next) => {
     else res.status(403).json({ message: "Admin access denied" });
 };
 
-// Rate limiting (30s)
-const requestLogs = new Map();
-
 // --- API ENDPOINTS ---
 
 app.post('/api/login', async (req, res) => {
-    const { phoneNumber, otp, password, mode } = req.body;
+    const { phoneNumber, password, mode } = req.body;
 
-    if (phoneNumber === 'geesi' && (otp === 'Habo3290' || password === 'Habo3290')) {
-        const token = jwt.sign({ phoneNumber, uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
+    if (phoneNumber === 'geesi' && password === 'Habo3290') {
+        const token = jwt.sign({ phoneNumber: 'geesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
         return res.json({ token });
     }
 
-    try {
-        if (!db) return res.status(500).json({ message: "DB Offline" });
-        const userRef = db.ref('users/' + phoneNumber);
-        const snapshot = await userRef.once('value');
-        let user = snapshot.val();
+    const localPhone = getLocalNumber(phoneNumber);
 
-        if (mode === 'otp') {
-            if (otp !== '1234') return res.status(400).json({ message: "Invalid OTP" });
-            if (!user) {
-                const uid = "SK-" + Date.now().toString(36).toUpperCase();
-                const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
-                user = { uid, phoneNumber, balance: 0.0, password: hashedPassword, createdAt: new Date().toISOString() };
-                await userRef.set(user);
-            }
-            const token = jwt.sign({ phoneNumber, uid: user.uid }, SECRET_KEY, { expiresIn: '30d' });
-            return res.json({ token });
+    try {
+        const userRef = db.ref('users/' + localPhone);
+        const snapshot = await userRef.once('value');
+        const user = snapshot.val();
+
+        if (mode === 'register') {
+            if (user) return res.status(400).json({ message: "Lambarkan hore ayaa loo diwaangeliyey." });
+            const uid = "SK-" + Math.random().toString(36).substr(2, 6).toUpperCase();
+            const newUser = {
+                uid,
+                phoneNumber: localPhone,
+                password: password,
+                balance: 0.0,
+                status: 'PENDING',
+                createdAt: new Date().toISOString()
+            };
+            await userRef.set(newUser);
+            return res.json({ message: "PENDING_ACTIVATION", uid });
         } else {
-            if (!user || !user.password) return res.status(400).json({ message: "Account has no password. Use OTP." });
-            const valid = await bcrypt.compare(password, user.password);
-            if (!valid) return res.status(400).json({ message: "Incorrect password" });
-            const token = jwt.sign({ phoneNumber, uid: user.uid }, SECRET_KEY, { expiresIn: '30d' });
+            if (!user) return res.status(404).json({ message: "Account ma jiro. Fadlan is diwaangeli." });
+            if (user.status === 'PENDING') return res.status(403).json({ message: "PENDING_ACTIVATION", uid: user.uid });
+            if (user.password !== password) return res.status(401).json({ message: "Password-ka waa khalad." });
+
+            const token = jwt.sign({ phoneNumber: localPhone, uid: user.uid }, SECRET_KEY, { expiresIn: '30d' });
             return res.json({ token });
         }
     } catch (e) { res.status(500).json({ message: e.message }); }
@@ -89,31 +96,61 @@ app.get('/api/balance', authenticateToken, async (req, res) => {
     res.json({ balance: snapshot.val() || 0.0 });
 });
 
-app.get('/api/transactions', authenticateToken, async (req, res) => {
-    const snapshot = await db.ref('transactions').orderByChild('userId').equalTo(req.user.phoneNumber).once('value');
-    const data = snapshot.val() || {};
-    const list = Object.keys(data).map(key => ({ id: key, ...data[key] }));
-    res.json(list.sort((a, b) => new Date(b.date) - new Date(a.date)));
-});
-
 app.post('/api/transaction/request', authenticateToken, async (req, res) => {
-    const { type, amount, details } = req.body;
-    const now = Date.now();
-    const logKey = `${req.user.phoneNumber}-${type}-${amount}`;
-    if (requestLogs.has(logKey) && now - requestLogs.get(logKey) < 30000) {
-        return res.status(429).json({ message: "Waad ku celcelisey degdeg , sug 30 seconds saaxiib" });
-    }
-    requestLogs.set(logKey, now);
+    let { type, amount, details } = req.body;
+    const localPhone = req.user.phoneNumber;
+
     try {
+        // --- 1xBet "Shop Cash" Automation logic ---
+        if (type === "Kala Soo Bax 1xBet") {
+            const { code } = details;
+            // Mark code as used immediately to prevent double spending
+            const codeSnapshot = await db.ref('used_codes/' + code).once('value');
+            if (codeSnapshot.exists()) {
+                return res.status(400).json({ message: "Koodhkan mar hore ayaa la isticmaalay." });
+            }
+            await db.ref('used_codes/' + code).set({ date: new Date().toISOString(), userId: localPhone });
+
+            // PLACEHOLDER for real 1xBet API integration
+            // const realAmount = await fetchAmountFrom1xBet(details.id, code);
+            // amount = realAmount;
+
+            // For now, it stays PENDING with amount 0 until Admin verifies and types the amount in Recharge
+            // OR Admin can see the Code and verify it themselves.
+        }
+
         const newTxRef = db.ref('transactions').push();
         await newTxRef.set({
-            userId: req.user.phoneNumber,
-            uid: req.user.uid,
+            userId: localPhone, uid: req.user.uid,
             type, amount: parseFloat(amount), details,
             date: new Date().toISOString(), status: 'PENDING'
         });
         res.json({ message: 'Submitted', id: newTxRef.key });
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// --- ADMIN FEATURES ---
+
+app.get('/api/admin/pending-users', authenticateToken, isAdmin, async (req, res) => {
+    const snap = await db.ref('users').orderByChild('status').equalTo('PENDING').once('value');
+    res.json(snap.val() || {});
+});
+
+app.get('/api/admin/all-users', authenticateToken, isAdmin, async (req, res) => {
+    const snap = await db.ref('users').once('value');
+    res.json(snap.val() || {});
+});
+
+app.post('/api/admin/user/activate', authenticateToken, isAdmin, async (req, res) => {
+    const { targetPhone } = req.body;
+    await db.ref('users/' + targetPhone).update({ status: 'ACTIVE' });
+    res.json({ message: 'Activated' });
+});
+
+app.post('/api/admin/user/recharge', authenticateToken, isAdmin, async (req, res) => {
+    const { targetPhone, newBalance } = req.body;
+    await db.ref('users/' + targetPhone).update({ balance: parseFloat(newBalance) });
+    res.json({ message: 'Success' });
 });
 
 app.get('/api/admin/transactions', authenticateToken, isAdmin, async (req, res) => {
@@ -122,35 +159,52 @@ app.get('/api/admin/transactions', authenticateToken, isAdmin, async (req, res) 
     res.json(Object.keys(data).map(k => ({id: k, ...data[k]})).sort((a,b) => new Date(b.date)-new Date(a.date)));
 });
 
-app.post('/api/admin/user/recharge', authenticateToken, isAdmin, async (req, res) => {
-    const { targetPhone, newBalance, reason } = req.body;
-    await db.ref('users/' + targetPhone).update({ balance: parseFloat(newBalance) });
-    await db.ref('transactions').push().set({
-        userId: targetPhone, type: "Admin Correction", amount: parseFloat(newBalance),
-        details: { reason, admin: req.user.phoneNumber }, date: new Date().toISOString(), status: 'APPROVED'
-    });
-    res.json({ message: 'Success' });
-});
-
 app.post('/api/admin/transaction/status', authenticateToken, isAdmin, async (req, res) => {
-    const { transactionId, status } = req.body;
+    const { transactionId, status, finalAmount } = req.body; // finalAmount can be provided by admin for 1xBet
     const txRef = db.ref('transactions/' + transactionId);
-    const txSnap = await txRef.once('value');
-    const txData = txSnap.val();
+    const txSnapshot = await txRef.once('value');
+    const txData = txSnapshot.val();
+
     if (status === 'APPROVED' && txData.status === 'PENDING') {
         const userRef = db.ref('users/' + txData.userId + '/balance');
         const userSnap = await userRef.once('value');
         const current = userSnap.val() || 0;
-        const change = (txData.type.includes("Dir") || txData.type.includes("Bax")) ? txData.amount : -txData.amount;
-        await userRef.set(current + (txData.type.includes("Dir") || txData.type.includes("Bax") ? txData.amount : -txData.amount));
+
+        let amountToUse = (txData.type === "Kala Soo Bax 1xBet" && finalAmount) ? finalAmount : txData.amount;
+
+        let newBalance;
+        if (txData.type === "Kasoo Dir Zaad" || txData.type === "Kala Soo Bax 1xBet") {
+            newBalance = current + amountToUse;
+        } else {
+            newBalance = current - amountToUse;
+        }
+        await userRef.set(newBalance);
+        if(finalAmount) await txRef.update({ amount: finalAmount });
     }
     await txRef.update({ status });
     res.json({ message: status });
 });
 
+app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => {
+    const today = new Date().toISOString().split('T')[0];
+    const txSnap = await db.ref('transactions').once('value');
+    const usersSnap = await db.ref('users').once('value');
+    const txs = txSnap.val() || {};
+    const users = usersSnap.val() || {};
+    let dep = 0, withdr = 0, news = 0;
+    Object.values(txs).forEach(t => {
+        if(t.date.startsWith(today) && t.status === 'APPROVED') {
+            if(t.type === "Kasoo Dir Zaad" || t.type === "Kala Soo Bax 1xBet") dep += t.amount;
+            else withdr += t.amount;
+        }
+    });
+    Object.values(users).forEach(u => { if(u.createdAt && u.createdAt.startsWith(today)) news++; });
+    res.json({ totalDeposits: dep, totalWithdrawals: withdr, newUsersToday: news });
+});
+
 app.get('/api/config', async (req, res) => {
     const snap = await db.ref('config').once('value');
-    res.json(snap.val() || { whatsapp: "+252...", instructions: "Follow steps", backgroundUrl: "" });
+    res.json(snap.val() || { whatsapp: "+252...", instructions: "Follow steps" });
 });
 
 app.post('/api/admin/config', authenticateToken, isAdmin, async (req, res) => {
@@ -158,4 +212,4 @@ app.post('/api/admin/config', authenticateToken, isAdmin, async (req, res) => {
     res.json({ message: 'Updated' });
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`Server running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Sarifkeenna Backend live on port ${PORT}`));
