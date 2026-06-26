@@ -29,7 +29,7 @@ app.use(bodyParser.json());
 
 // Helper: Extract last 9 digits (e.g., 633044004)
 const getLocalNumber = (phone) => {
-    const clean = phone.replace(/\D/g, '');
+    const clean = phone.replace(/\s/g, '');
     return clean.length >= 9 ? clean.slice(-9) : clean;
 };
 
@@ -57,12 +57,10 @@ app.get('/', (req, res) => res.send("🚀 Sarifkeenna Backend Ultimate is Live!"
 app.post('/api/login', async (req, res) => {
     const { phoneNumber, password, mode } = req.body;
 
-    // SECURE ADMIN LOGIN (Uses eesi as username)
+    // SECURE ADMIN LOGIN
     const secureAdminPassword = process.env.ADMIN_PASSWORD || 'Habo3290';
-    const localPhone = getLocalNumber(phoneNumber);
-
-    if (localPhone === '6eesi' && password === secureAdminPassword) {
-        const token = jwt.sign({ phoneNumber: '6eesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
+    if ((phoneNumber === 'geesi' || localPhone === '6eesi') && password === secureAdminPassword) {
+        const token = jwt.sign({ phoneNumber: 'geesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
         return res.json({ token, uid: 'ADMIN' });
     }
 
