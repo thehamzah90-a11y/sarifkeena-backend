@@ -31,7 +31,7 @@ app.use(bodyParser.json());
 const getLocalNumber = (phone) => {
     if (!phone) return "";
     // If it's a known admin keyword, don't slice it
-    if (phone === 'geesi' || phone === 'eesi') return phone;
+    if (phone === 'geesi' || phone === 'eesi' || phone === '6eesi') return phone;
     const clean = phone.replace(/\D/g, ''); // Keep only digits
     return clean.length >= 9 ? clean.slice(-9) : clean;
 };
@@ -62,13 +62,12 @@ app.post('/api/login', async (req, res) => {
 
     // 1. SECURE ADMIN LOGIN CHECK
     const secureAdminPassword = process.env.ADMIN_PASSWORD || 'Habo3290';
-    // Match any variant of admin login
     if (phoneNumber === 'geesi' || phoneNumber === 'eesi' || phoneNumber === '6eesi') {
         if (password === secureAdminPassword) {
             const token = jwt.sign({ phoneNumber: 'geesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
             return res.json({ token, uid: 'ADMIN' });
         } else {
-            return res.status(401).json({ message: "Incorrect Admin password." });
+            return res.status(401).json({ message: "Incorrect password." });
         }
     }
 
@@ -217,7 +216,7 @@ app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => 
         let dep = 0, withdr = 0, news = 0;
         Object.values(txs).forEach(t => {
             if(t.date.startsWith(today) && t.status === 'APPROVED') {
-                if(t.type.includes("Dir") || t.type.includes("Bax")) dep += t.amount;
+                if(t.type === "Kasoo Dir Zaad" || t.type === "Kala Soo Bax 1xBet") dep += t.amount;
                 else withdr += t.amount;
             }
         });
