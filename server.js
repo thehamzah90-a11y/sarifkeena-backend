@@ -27,7 +27,7 @@ try {
 app.use(cors());
 app.use(bodyParser.json());
 
-// Helper: Extract last 9 digits (e.g., 633044004)
+// Helper: Extract last 9 digits starting with 6
 const getLocalNumber = (phone) => {
     if (!phone) return "";
     const clean = phone.replace(/\s/g, '');
@@ -67,18 +67,19 @@ app.post('/api/login', async (req, res) => {
     }
 
     if (localPhone.length < 9) {
-        return res.status(400).json({ message: "Fadlan dhameystir nambarka (9 digits required)." });
+        return res.status(400).json({ message: "Please complete the phone number." });
     }
 
     try {
-        if (!db) return res.status(500).json({ message: "Database connected failed." });
+        if (!db) return res.status(500).json({ message: "Database connection failed." });
 
         const userRef = db.ref('users/' + localPhone);
         const snapshot = await userRef.once('value');
         const user = snapshot.val();
 
         if (mode === 'register') {
-            if (user) return res.status(400).json({ message: "Lambarkan hore ayaa loo diwaangeliyey." });
+            if (user) return res.status(400).json({ message: "This number is already registered." });
+
             const uid = "SK-" + Math.random().toString(36).substr(2, 6).toUpperCase();
             const newUser = {
                 uid,
@@ -91,9 +92,10 @@ app.post('/api/login', async (req, res) => {
             await userRef.set(newUser);
             return res.json({ message: "PENDING_ACTIVATION", uid });
         } else {
-            if (!user) return res.status(404).json({ message: "Account ma jiro. Fadlan is diwaangeli." });
+            // Login mode
+            if (!user) return res.status(404).json({ message: "Account does not exist. Please register." });
             if (user.status === 'PENDING') return res.status(403).json({ message: "PENDING_ACTIVATION", uid: user.uid });
-            if (user.password !== password) return res.status(401).json({ message: "Password-ka waa khalad." });
+            if (user.password !== password) return res.status(401).json({ message: "Incorrect password." });
 
             const token = jwt.sign({ phoneNumber: localPhone, uid: user.uid }, SECRET_KEY, { expiresIn: '30d' });
             return res.json({ token, uid: user.uid });
@@ -125,7 +127,7 @@ app.post('/api/transaction/request', authenticateToken, async (req, res) => {
             const { code } = details;
             const codeSnapshot = await db.ref('used_codes/' + code).once('value');
             if (codeSnapshot.exists()) {
-                return res.status(400).json({ message: "Koodhkan mar hore ayaa la isticmaalay." });
+                return res.status(400).json({ message: "This code has already been used." });
             }
             await db.ref('used_codes/' + code).set({ date: new Date().toISOString(), userId: localPhone });
         }
@@ -207,7 +209,7 @@ app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => 
         let dep = 0, withdr = 0, news = 0;
         Object.values(txs).forEach(t => {
             if(t.date.startsWith(today) && t.status === 'APPROVED') {
-                if(t.type === "Kasoo Dir Zaad" || t.type === "Kala Soo Bax 1xBet") dep += t.amount;
+                if(t.type.includes("Dir") || t.type.includes("Bax")) dep += t.amount;
                 else withdr += t.amount;
             }
         });
@@ -218,7 +220,14 @@ app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => 
 
 app.get('/api/config', async (req, res) => {
     const snap = await db.ref('config').once('value');
-    res.json(snap.val() || { whatsapp: "+252...", instructions: "Follow steps" });
+    res.json(snap.val() || {
+        whatsapp: "+252...",
+        instructions: "Follow steps",
+        backgroundUrl: "",
+        announcement: "",
+        minVersion: "1.0",
+        updateUrl: ""
+    });
 });
 
 app.post('/api/admin/config', authenticateToken, isAdmin, async (req, res) => {
