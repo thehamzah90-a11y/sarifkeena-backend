@@ -29,7 +29,7 @@ app.use(bodyParser.json());
 
 // Helper: Extract last 9 digits (e.g., 633044004)
 const getLocalNumber = (phone) => {
-    const clean = phone.replace(/\s/g, '');
+    const clean = phone.replace(/\D/g, '');
     return clean.length >= 9 ? clean.slice(-9) : clean;
 };
 
@@ -52,16 +52,22 @@ const isAdmin = (req, res, next) => {
 
 // --- API ENDPOINTS ---
 
+app.get('/', (req, res) => res.send("🚀 Sarifkeenna Backend Ultimate is Live!"));
+
 app.post('/api/login', async (req, res) => {
     const { phoneNumber, password, mode } = req.body;
-    const localPhone = getLocalNumber(phoneNumber);
 
     // SECURE ADMIN LOGIN (Uses eesi as username)
-    // Password pulled from Render Environment for maximum security
     const secureAdminPassword = process.env.ADMIN_PASSWORD || 'Habo3290';
+    const localPhone = getLocalNumber(phoneNumber);
+
     if (localPhone === '6eesi' && password === secureAdminPassword) {
         const token = jwt.sign({ phoneNumber: '6eesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
         return res.json({ token, uid: 'ADMIN' });
+    }
+
+    if (localPhone.length !== 9) {
+        return res.status(400).json({ message: "Fadlan dhameystir nambarka (9 digits required)." });
     }
 
     try {
@@ -107,13 +113,26 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
 
 app.post('/api/transaction/request', authenticateToken, async (req, res) => {
     const { type, amount, details } = req.body;
-    const newTxRef = db.ref('transactions').push();
-    await newTxRef.set({
-        userId: req.user.phoneNumber, uid: req.user.uid,
-        type, amount: parseFloat(amount), details,
-        date: new Date().toISOString(), status: 'PENDING'
-    });
-    res.json({ message: 'Submitted', id: newTxRef.key });
+    const localPhone = req.user.phoneNumber;
+
+    try {
+        if (type === "Kala Soo Bax 1xBet") {
+            const { code } = details;
+            const codeSnapshot = await db.ref('used_codes/' + code).once('value');
+            if (codeSnapshot.exists()) {
+                return res.status(400).json({ message: "Koodhkan mar hore ayaa la isticmaalay." });
+            }
+            await db.ref('used_codes/' + code).set({ date: new Date().toISOString(), userId: localPhone });
+        }
+
+        const newTxRef = db.ref('transactions').push();
+        await newTxRef.set({
+            userId: localPhone, uid: req.user.uid,
+            type, amount: parseFloat(amount), details: details || {},
+            date: new Date().toISOString(), status: 'PENDING'
+        });
+        res.json({ message: 'Submitted', id: newTxRef.key });
+    } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 // --- ADMIN FEATURES ---
@@ -157,6 +176,9 @@ app.post('/api/admin/transaction/status', authenticateToken, isAdmin, async (req
     const txRef = db.ref('transactions/' + transactionId);
     const txSnap = await txRef.once('value');
     const txData = txSnap.val();
+
+    if (!txData) return res.status(404).json({ message: "Transaction not found" });
+
     if (status === 'APPROVED' && txData.status === 'PENDING') {
         const userRef = db.ref('users/' + txData.userId + '/balance');
         const userSnapshot = await userRef.once('value');
