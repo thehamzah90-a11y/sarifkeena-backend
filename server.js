@@ -27,12 +27,12 @@ try {
 app.use(cors());
 app.use(bodyParser.json());
 
-// Helper: Extract last 9 digits strictly for normal users
+// Helper: Extract last 9 digits strictly (e.g., 633044004)
 const getLocalNumber = (phone) => {
     if (!phone) return "";
-    // If it's a known admin keyword variant, don't slice it
-    if (phone === 'geesi' || phone === 'eesi' || phone === '6eesi') return phone;
-    const clean = phone.replace(/\D/g, ''); // Keep only digits
+    // Admin keywords are handled separately, but let's be safe
+    if (phone === 'geesi' || phone === 'eesi') return phone;
+    const clean = phone.toString().replace(/\D/g, ''); // Keep only digits
     return clean.length >= 9 ? clean.slice(-9) : clean;
 };
 
@@ -55,30 +55,33 @@ const isAdmin = (req, res, next) => {
 
 // --- API ENDPOINTS ---
 
-app.get('/', (req, res) => res.send("🚀 Sarifkeenna Backend Ultimate v1.3 is Live!"));
+app.get('/', (req, res) => res.send("🚀 Sarifkeenna Backend Ultimate v1.3.1 is Live!"));
 
+// Master Login & Registration Route
 app.post('/api/login', async (req, res) => {
-    const { phoneNumber, password, mode } = req.body;
-
-    // 1. SECURE ADMIN LOGIN CHECK
-    const secureAdminPassword = process.env.ADMIN_PASSWORD || 'Habo3290';
-    if (phoneNumber === 'geesi' || phoneNumber === 'eesi' || phoneNumber === '6eesi') {
-        if (password === secureAdminPassword) {
-            const token = jwt.sign({ phoneNumber: 'geesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
-            return res.json({ token, uid: 'ADMIN' });
-        } else {
-            return res.status(401).json({ message: "Incorrect password." });
-        }
-    }
-
-    // 2. NORMAL USER LOGIN CHECK
-    const localPhone = getLocalNumber(phoneNumber);
-    if (localPhone.length < 9) {
-        return res.status(400).json({ message: "Please complete the phone number." });
-    }
-
     try {
-        if (!db) return res.status(500).json({ message: "Database connection failed." });
+        const { phoneNumber, password, mode } = req.body;
+
+        // 1. ADMIN CHECK (eesi / geesi)
+        const secureAdminPassword = process.env.ADMIN_PASSWORD || 'Habo3290';
+        const rawPhone = phoneNumber ? phoneNumber.toString().toLowerCase() : "";
+
+        if (rawPhone === 'geesi' || rawPhone === 'eesi' || rawPhone.endsWith('6eesi')) {
+            if (password === secureAdminPassword) {
+                const token = jwt.sign({ phoneNumber: 'geesi', uid: 'ADMIN' }, SECRET_KEY, { expiresIn: '30d' });
+                return res.json({ token, uid: 'ADMIN' });
+            } else {
+                return res.status(401).json({ message: "Incorrect password." });
+            }
+        }
+
+        // 2. USER NORMALIZATION
+        const localPhone = getLocalNumber(phoneNumber);
+        if (localPhone.length < 9) {
+            return res.status(400).json({ message: "Please complete the phone number." });
+        }
+
+        if (!db) return res.status(500).json({ message: "Database offline." });
 
         const userRef = db.ref('users/' + localPhone);
         const snapshot = await userRef.once('value');
@@ -99,7 +102,7 @@ app.post('/api/login', async (req, res) => {
             await userRef.set(newUser);
             return res.json({ message: "PENDING_ACTIVATION", uid });
         } else {
-            // Login mode
+            // Login Mode
             if (!user) return res.status(404).json({ message: "Account does not exist. Please register." });
             if (user.status === 'PENDING') return res.status(403).json({ message: "PENDING_ACTIVATION", uid: user.uid });
             if (user.password !== password) return res.status(401).json({ message: "Incorrect password." });
@@ -109,34 +112,42 @@ app.post('/api/login', async (req, res) => {
         }
     } catch (e) {
         console.error("Login Error:", e.message);
-        res.status(500).json({ message: "Server error during login." });
+        res.status(500).json({ message: "Server error. Please try again." });
     }
 });
 
+// Balance Check
 app.get('/api/balance', authenticateToken, async (req, res) => {
-    const snapshot = await db.ref('users/' + req.user.phoneNumber + '/balance').once('value');
-    res.json({ balance: snapshot.val() || 0.0 });
+    try {
+        const snapshot = await db.ref('users/' + req.user.phoneNumber + '/balance').once('value');
+        res.json({ balance: snapshot.val() || 0.0 });
+    } catch (e) { res.status(500).send(0.0); }
 });
 
+// User's Own Transactions
 app.get('/api/transactions', authenticateToken, async (req, res) => {
-    const snapshot = await db.ref('transactions').orderByChild('userId').equalTo(req.user.phoneNumber).once('value');
-    const data = snapshot.val() || {};
-    const list = Object.keys(data).map(key => ({ id: key, ...data[key] }));
-    res.json(list.sort((a, b) => new Date(b.date) - new Date(a.date)));
+    try {
+        const snapshot = await db.ref('transactions').orderByChild('userId').equalTo(req.user.phoneNumber).once('value');
+        const data = snapshot.val() || {};
+        const list = Object.keys(data).map(key => ({ id: key, ...data[key] }));
+        res.json(list.sort((a, b) => new Date(b.date) - new Date(a.date)));
+    } catch (e) { res.json([]); }
 });
 
+// Submit Transaction Request
 app.post('/api/transaction/request', authenticateToken, async (req, res) => {
     const { type, amount, details } = req.body;
     const localPhone = req.user.phoneNumber;
 
     try {
-        if (type === "Kala Soo Bax 1xBet") {
-            const { code } = details;
-            const codeSnapshot = await db.ref('used_codes/' + code).once('value');
+        // 1xBet Anti-Double-Spend logic
+        if (type.includes("1xBet") && details.code) {
+            const codeRef = db.ref('used_codes/' + details.code);
+            const codeSnapshot = await codeRef.once('value');
             if (codeSnapshot.exists()) {
                 return res.status(400).json({ message: "This code has already been used." });
             }
-            await db.ref('used_codes/' + code).set({ date: new Date().toISOString(), userId: localPhone });
+            await codeRef.set({ date: new Date().toISOString(), user: localPhone });
         }
 
         const newTxRef = db.ref('transactions').push();
@@ -145,46 +156,53 @@ app.post('/api/transaction/request', authenticateToken, async (req, res) => {
             type, amount: parseFloat(amount), details: details || {},
             date: new Date().toISOString(), status: 'PENDING'
         });
-        res.json({ message: 'Submitted', id: newTxRef.key });
+        res.json({ message: 'Submitted successfully', id: newTxRef.key });
     } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// --- ADMIN FEATURES ---
+// --- ADMIN FEATURES (PROTECTED) ---
 
+// Get Pending Activations
 app.get('/api/admin/pending-users', authenticateToken, isAdmin, async (req, res) => {
     const snap = await db.ref('users').orderByChild('status').equalTo('PENDING').once('value');
     res.json(snap.val() || {});
 });
 
+// Get All User Base
 app.get('/api/admin/all-users', authenticateToken, isAdmin, async (req, res) => {
     const snap = await db.ref('users').once('value');
     res.json(snap.val() || {});
 });
 
+// Activate a User
 app.post('/api/admin/user/activate', authenticateToken, isAdmin, async (req, res) => {
     const { targetPhone } = req.body;
     await db.ref('users/' + targetPhone).update({ status: 'ACTIVE' });
-    res.json({ message: 'Activated' });
+    res.json({ message: 'User Activated' });
 });
 
+// Delete a User
 app.post('/api/admin/user/delete', authenticateToken, isAdmin, async (req, res) => {
     const { targetPhone } = req.body;
     await db.ref('users/' + targetPhone).remove();
-    res.json({ message: 'User deleted' });
+    res.json({ message: 'User Deleted Permanent' });
 });
 
+// Manual Recharge
 app.post('/api/admin/user/recharge', authenticateToken, isAdmin, async (req, res) => {
     const { targetPhone, newBalance } = req.body;
     await db.ref('users/' + targetPhone).update({ balance: parseFloat(newBalance) });
-    res.json({ message: 'Success' });
+    res.json({ message: 'Balance Updated' });
 });
 
+// Master History for Search
 app.get('/api/admin/transactions', authenticateToken, isAdmin, async (req, res) => {
     const snap = await db.ref('transactions').once('value');
     const data = snap.val() || {};
     res.json(Object.keys(data).map(k => ({id: k, ...data[k]})).sort((a,b) => new Date(b.date)-new Date(a.date)));
 });
 
+// Process Transaction Status
 app.post('/api/admin/transaction/status', authenticateToken, isAdmin, async (req, res) => {
     const { transactionId, status, finalAmount } = req.body;
     const txRef = db.ref('transactions/' + transactionId);
@@ -198,21 +216,22 @@ app.post('/api/admin/transaction/status', authenticateToken, isAdmin, async (req
         const userSnapshot = await userRef.once('value');
         const current = userSnapshot.val() || 0;
 
-        let amountToUse = (finalAmount !== undefined && finalAmount !== null) ? finalAmount : txData.amount;
+        let amountToUse = (finalAmount !== undefined && finalAmount !== null) ? parseFloat(finalAmount) : txData.amount;
 
         let newBalance;
-        if (txData.type === "Kasoo Dir Zaad" || txData.type === "Kala Soo Bax 1xBet") {
+        if (txData.type === "Kasoo Dir Zaad" || txData.type === "Kala Soo Bax 1xBet" || txData.type === "KASOO DIR ZAAD" || txData.type === "KASOO SAAR 1XBET") {
             newBalance = current + amountToUse;
         } else {
             newBalance = current - amountToUse;
         }
         await userRef.set(newBalance);
-        if(finalAmount !== undefined) await txRef.update({ amount: finalAmount });
+        if(finalAmount !== undefined) await txRef.update({ amount: amountToUse });
     }
     await txRef.update({ status });
-    res.json({ message: status });
+    res.json({ message: `Marked as ${status}` });
 });
 
+// Daily Analytics
 app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
@@ -222,8 +241,8 @@ app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => 
         const users = usersSnap.val() || {};
         let dep = 0, withdr = 0, news = 0;
         Object.values(txs).forEach(t => {
-            if(t.date.startsWith(today) && t.status === 'APPROVED') {
-                if(t.type === "Kasoo Dir Zaad" || t.type === "Kala Soo Bax 1xBet") dep += t.amount;
+            if(t.date && t.date.startsWith(today) && t.status === 'APPROVED') {
+                if(t.type.toLowerCase().includes("dir") || t.type.toLowerCase().includes("saar")) dep += t.amount;
                 else withdr += t.amount;
             }
         });
@@ -232,11 +251,12 @@ app.get('/api/admin/analytics', authenticateToken, isAdmin, async (req, res) => 
     } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
+// Global App Config (Kill Switch & Settings)
 app.get('/api/config', async (req, res) => {
     const snap = await db.ref('config').once('value');
     res.json(snap.val() || {
         whatsapp: "+252...",
-        instructions: "Follow steps",
+        instructions: "Follow instructions carefully.",
         backgroundUrl: "",
         announcement: "",
         minVersion: "1.0",
@@ -246,7 +266,7 @@ app.get('/api/config', async (req, res) => {
 
 app.post('/api/admin/config', authenticateToken, isAdmin, async (req, res) => {
     await db.ref('config').update(req.body);
-    res.json({ message: 'Updated' });
+    res.json({ message: 'Settings Updated' });
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Sarifkeenna Backend live on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Sarifkeenna MASTER v1.3.1 live on ${PORT}`));

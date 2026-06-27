@@ -1,7 +1,7 @@
 {
   "name": "sarifkeenna-backend",
-  "version": "1.3.0",
-  "description": "Ultimate Backend for Sarifkeenna Digital Gateway",
+  "version": "1.3.1",
+  "description": "Master Backend for Sarifkeenna Digital Gateway",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
