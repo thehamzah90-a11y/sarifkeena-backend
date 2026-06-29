@@ -1,7 +1,7 @@
 {
-  "name": "sarifkeena-supreme-v1-9-6",
+  "name": "sarifkeena-supreme",
   "version": "1.9.6",
-  "description": "v1.9.6 Supreme Empire - Master Stealth Backend",
+  "description": "Supreme Empire Master Backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -12,5 +12,8 @@
     "jsonwebtoken": "^9.0.2",
     "cors": "^2.8.5",
     "firebase-admin": "^12.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
