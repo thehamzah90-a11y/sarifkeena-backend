@@ -12,6 +12,7 @@ const SECRET_KEY = process.env.SECRET_KEY || 'SarifKeennaSecret786';
 // --- ULTIMATE STEALTH SECURITY CONFIG ---
 const MASTER_PASS = process.env.ADMIN_PASSWORD || 'Habo3290';
 const SUPPORT_PASS = process.env.SUPPORT_ADMIN_PASS || 'Support@786';
+const SUPPORT_PASS_2 = process.env.SUPPORT_ADMIN_PASS_2 || 'Support@VIP';
 const LISTENER_PASS = process.env.LISTENER_PASS || 'Sensor@786';
 
 // --- DATABASE CONNECTION ---
@@ -130,7 +131,8 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
         }
 
         if (phoneNumber === 'maamulka' || phoneNumber === 'maamulka_2') {
-            if (password === SUPPORT_PASS) {
+            const requiredPass = (phoneNumber === 'maamulka') ? SUPPORT_PASS : SUPPORT_PASS_2;
+            if (password === requiredPass) {
                 const currentDna = locks.support_dna ? locks.support_dna[phoneNumber] : null;
                 if (currentDna && currentDna !== deviceId) {
                     await triggerFraudAlert("SUPPORT_COLLISION", phoneNumber, deviceId, { msg: "Device collision" });
