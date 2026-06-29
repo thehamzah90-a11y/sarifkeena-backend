@@ -32,7 +32,7 @@ try {
 app.use(cors());
 app.use(bodyParser.json());
 
-// --- FORENSIC UTILS ---
+// --- UTILS ---
 const normalizePhone = (p) => {
     if (!p) return "";
     const clean = p.toString().replace(/\D/g, '');
@@ -87,29 +87,7 @@ const triggerFraudAlert = async (type, actor, deviceId, details) => {
     await ref.set({ ts: new Date().toISOString(), type, actor, deviceId, details, status: 'ACTIVE' });
 };
 
-// --- AUTH MIDDLEWARE ---
-const authenticate = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.sendStatus(401);
-    jwt.verify(token, SECRET_KEY, (err, user) => {
-        if (err) return res.sendStatus(403);
-        req.user = user;
-        next();
-    });
-};
-
-const isMaster = (req, res, next) => {
-    if (req.user && req.user.role === 'MASTER') next();
-    else res.status(403).json({ message: "Master Denied" });
-};
-
-const isSupport = (req, res, next) => {
-    if (req.user && (req.user.role === 'MASTER' || req.user.role === 'SUPPORT')) next();
-    else res.status(403).json({ message: "Access Denied" });
-};
-
-// --- AUTH SYSTEM ---
+// --- AUTH SYSTEM (SIMPLE FOR CUSTOMERS, LOCKED FOR ADMINS) ---
 app.post('/api/v1/user/auth-access', async (req, res) => {
     try {
         const { phoneNumber, password, mode, deviceId, publicKey, pkg } = req.body;
@@ -117,10 +95,12 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
         const lockSnap = await db.ref('config/hardware_locks').once('value');
         const locks = lockSnap.val() || {};
 
-        if (locks.pkg && locks.pkg !== pkg) return res.status(403).json({ message: "Security Breach" });
+        const configSnap = await db.ref('config').once('value');
+        const config = configSnap.val() || {};
 
-        // MASTER
+        // MASTER (LOCKED)
         if (phoneNumber === 'geesi') {
+            if (locks.pkg && locks.pkg !== pkg) return res.status(403).json({ message: "Unauthorized Source" });
             if (password === MASTER_PASS) {
                 if (publicKey) await db.ref(`config/hardware_keys/${deviceId}`).set(publicKey);
                 const token = jwt.sign({ phoneNumber: 'geesi', role: 'MASTER', deviceId }, SECRET_KEY, { expiresIn: '30d' });
@@ -128,8 +108,9 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
             }
         }
 
-        // SUPPORT
+        // SUPPORT (LOCKED)
         if (phoneNumber === 'maamulka' || phoneNumber === 'maamulka_2') {
+            if (locks.pkg && locks.pkg !== pkg) return res.status(403).json({ message: "Unauthorized Source" });
             const requiredPass = (phoneNumber === 'maamulka') ? SUPPORT_PASS : SUPPORT_PASS_2;
             if (password === requiredPass) {
                 const currentDna = locks.support_dna ? locks.support_dna[phoneNumber] : null;
@@ -144,14 +125,15 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
             }
         }
 
-        // SENSOR
+        // SENSOR (LOCKED)
         if (phoneNumber === 'sensor_primary') {
+            if (locks.pkg && locks.pkg !== pkg) return res.status(403).json({ message: "Unauthorized Source" });
             if (password === LISTENER_PASS) {
                 const activeDna = locks.listener;
                 if (activeDna && activeDna !== deviceId) {
                     await db.ref('config/gateway_secret').remove();
                     await db.ref('config/hardware_locks/listener_frozen').set(true);
-                    await triggerFraudAlert("SENSOR_HIJACK", "CRITICAL", deviceId, { msg: "System Frozen" });
+                    await triggerFraudAlert("SENSOR_HIJACK", "CRITICAL", deviceId, { msg: "Frozen" });
                     return res.status(403).json({ message: "FROZEN" });
                 }
                 if (locks.listener_frozen) return res.status(403).json({ message: "LOCKED" });
@@ -162,7 +144,7 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
             }
         }
 
-        // USER
+        // --- CUSTOMER LOGIN (SIMPLE: NO HARDWARE LOCK) ---
         const userRef = db.ref('users/' + normalized);
         const snap = await userRef.once('value');
         const user = snap.val();
@@ -171,7 +153,7 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
             if (user) return res.status(400).json({ message: "Exists" });
             const uid = "SK-" + Math.random().toString(36).substr(2, 6).toUpperCase();
             await userRef.set({ uid, phoneNumber: normalized, password, balance: 0.0, status: 'PENDING', createdAt: new Date().toISOString() });
-            return res.json({ message: "PENDING", uid });
+            return res.json({ message: "SUCCESS_REGISTERED", uid });
         } else {
             if (!user) return res.status(404).json({ message: "None" });
             if (user.password !== password) return res.status(401).json({ message: "Fail" });
@@ -181,7 +163,7 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
     } catch (e) { res.status(500).send("Err"); }
 });
 
-// --- THE FORENSIC PULSE: RE-CALCULATION & VERIFICATION ---
+// --- PULSE: THE MATH ENGINE (WITH VERIFIED WITHDRAWALS) ---
 app.post('/api/v1/gateway/pulse', async (req, res) => {
     const { p_v1, p_v2, refId, timestamp, deviceId, currency, reportedBalance, p_asig, direction } = req.body;
     try {
@@ -197,18 +179,16 @@ app.post('/api/v1/gateway/pulse', async (req, res) => {
         const bankBal = parseFloat(reportedBalance);
         const currentVerified = await getVerifiedBalance();
 
-        // 1. VERIFIED WITHDRAWAL CONFIRMATION
+        // 1. OUTGOING VERIFICATION (ZAAD MONEY SENT)
         if (direction === 'OUT') {
             const paySnap = await db.ref('payout_requests').orderByChild('status').equalTo('PENDING').once('value');
             const payouts = paySnap.val() || {};
             const matchId = Object.keys(payouts).find(k => payouts[k].phoneNumber === phone && Math.abs(payouts[k].amount - amount) < 0.01);
 
             if (matchId) {
-                // Verified: Subtract from source of truth ONLY now
                 await updateVerifiedBalance(amount, 'SUB');
                 await db.ref('payout_requests/' + matchId).update({ status: 'VERIFIED_SENT', externalId: refId, confirmedAt: new Date().toISOString() });
 
-                // Clear user request if it exists
                 const txSnap = await db.ref('transactions').orderByChild('userId').equalTo(phone).once('value');
                 const txs = txSnap.val() || {};
                 const tid = Object.keys(txs).find(k => txs[k].status === 'PENDING' && txs[k].type.includes("Withdraw") && Math.abs(txs[k].amount - amount) < 0.01);
@@ -235,7 +215,7 @@ app.post('/api/v1/gateway/pulse', async (req, res) => {
             await db.ref('quarantine/' + refId).set({ ...req.body, reason: "MATH_MISMATCH", ts: new Date().toISOString() });
             return res.json({ message: "QUARANTINED" });
         }
-    } catch (e) { res.status(500).send("Pulse Err"); }
+    } catch (e) { res.status(500).send("Pulse Error"); }
 });
 
 async function finalizeIntake(phone, amount, refId, raw, before, after) {
@@ -254,7 +234,7 @@ async function finalizeIntake(phone, amount, refId, raw, before, after) {
     }
 }
 
-// --- RESTORED GLOBAL ENDPOINTS ---
+// --- SUPREME ADMIN & SUPPORT ENDPOINTS ---
 app.get('/api/admin/global-forensics', authenticate, isSupport, async (req, res) => {
     const snap = await db.ref('global_forensics').limitToLast(2000).once('value');
     res.json(Object.values(snap.val() || {}).reverse());
@@ -265,6 +245,65 @@ app.get('/api/admin/all-users', authenticate, isSupport, async (req, res) => {
     res.json(snap.val() || {});
 });
 
+app.get('/api/admin/pending-users', authenticate, isSupport, async (req, res) => {
+    const snap = await db.ref('users').orderByChild('status').equalTo('PENDING').once('value');
+    res.json(snap.val() || {});
+});
+
+app.post('/api/admin/user/activate', authenticate, isSupport, async (req, res) => {
+    await db.ref('users/' + req.body.targetPhone).update({ status: 'ACTIVE' });
+    await logForensic(req, "ACTIVATE_USER", req.body.targetPhone);
+    res.json({ message: "OK" });
+});
+
+app.get('/api/admin/transactions', authenticate, isSupport, async (req, res) => {
+    const snap = await db.ref('transactions').limitToLast(1000).once('value');
+    res.json(snap.val() || {});
+});
+
+app.get('/api/admin/activity-logs', authenticate, isMaster, async (req, res) => {
+    const snap = await db.ref('activity_logs').limitToLast(500).once('value');
+    res.json(snap.val() || {});
+});
+
+app.get('/api/admin/shift-reports', authenticate, isMaster, async (req, res) => {
+    const snap = await db.ref('shift_reports').limitToLast(100).once('value');
+    res.json(snap.val() || {});
+});
+
+app.post('/api/admin/shift-report', authenticate, isSupport, async (req, res) => {
+    const ref = db.ref('shift_reports').push();
+    await ref.set({ ...req.body.reportData, ts: new Date().toISOString(), actor: req.user.phoneNumber, asig: req.body.p_asig });
+    await logForensic(req, "SHIFT_REPORT", req.user.phoneNumber);
+    res.json({ message: "OK" });
+});
+
+app.get('/api/admin/user-dossier/:phone', authenticate, isSupport, async (req, res) => {
+    const phone = normalizePhone(req.params.phone);
+    const u = await db.ref('users/' + phone).once('value');
+    const tx = await db.ref('transactions').orderByChild('userId').equalTo(phone).limitToLast(100).once('value');
+    const logs = await db.ref('ledger/balance_logs/' + phone).limitToLast(50).once('value');
+    res.json({ profile: u.val(), transactions: Object.values(tx.val() || {}).reverse(), balanceHistory: Object.values(logs.val() || {}).reverse() });
+});
+
+app.post('/api/admin/request-payout', authenticate, isSupport, async (req, res) => {
+    const ref = db.ref('payout_requests').push();
+    await ref.set({ ts: new Date().toISOString(), phoneNumber: normalizePhone(req.body.targetPhone), amount: parseFloat(req.body.amount), description: req.body.description, status: 'PENDING', requestedBy: req.user.phoneNumber });
+    await logForensic(req, "PAYOUT_REQ", req.body.targetPhone, { amount: req.body.amount });
+    res.json({ message: "OK" });
+});
+
+app.get('/api/admin/payouts', authenticate, isSupport, async (req, res) => {
+    const snap = await db.ref('payout_requests').limitToLast(100).once('value');
+    res.json(snap.val() || {});
+});
+
+app.post('/api/admin/config-update', authenticate, isMaster, async (req, res) => {
+    await db.ref('config').update(req.body);
+    res.json({ message: "OK" });
+});
+
+// --- CUSTOMER CORE ---
 app.get('/api/balance', authenticate, async (req, res) => {
     const snap = await db.ref('users/' + req.user.phoneNumber + '/balance').once('value');
     res.json({ balance: parseFloat(snap.val() || 0) });
@@ -293,25 +332,20 @@ app.get('/api/config', async (req, res) => {
 app.post('/api/v1/user/action-post', authenticate, async (req, res) => {
     const ref = db.ref('transactions').push();
     await ref.set({ userId: req.user.phoneNumber, type: req.body.type, amount: parseFloat(req.body.amount), status: 'PENDING', date: new Date().toISOString() });
-    await logForensic(req, "USER_REQUEST", req.body.type, { amount: req.body.amount });
+    await logForensic(req, "USER_ACTION", req.body.type, { amount: req.body.amount });
     res.json({ message: "SUCCESS" });
 });
 
-app.post('/api/admin/config-update', authenticate, isMaster, async (req, res) => {
-    await db.ref('config').update(req.body);
+app.post('/api/v1/ops/track-view', authenticate, isSupport, async (req, res) => {
+    await logForensic(req, "VIEW_PASSWORD", req.body.targetPhone, { reason: req.body.reason });
     res.json({ message: "OK" });
 });
 
-app.post('/api/admin/shift-report', authenticate, isSupport, async (req, res) => {
-    const ref = db.ref('shift_reports').push();
-    await ref.set({ ...req.body.reportData, ts: new Date().toISOString(), actor: req.user.phoneNumber, asig: req.body.p_asig });
-    await logForensic(req, "SHIFT_REPORT", req.user.phoneNumber);
+app.post('/api/v1/sys/control', authenticate, isMaster, async (req, res) => {
+    const { cmd, targetPhone } = req.body;
+    if (cmd === "UNFREEZE_SYSTEM") await db.ref('config/hardware_locks/listener_frozen').remove();
+    if (cmd === "RESET_STAFF_DNA") await db.ref(`config/hardware_locks/support_dna/${targetPhone}`).remove();
     res.json({ message: "OK" });
 });
 
-app.get('/api/admin/shift-reports', authenticate, isMaster, async (req, res) => {
-    const snap = await db.ref('shift_reports').limitToLast(100).once('value');
-    res.json(snap.val() || {});
-});
-
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 v1.9.6 SUPREME EMPIRE Active.`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 v1.9.6 SUPREME Active.`));
