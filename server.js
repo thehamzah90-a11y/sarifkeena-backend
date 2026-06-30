@@ -45,7 +45,8 @@ const PATH = {
     LEDGER: 'ledger',
     FORENSICS: 'forensics',
     SYNC: 'sync_room',
-    AUDITS: 'audits'
+    AUDITS: 'audits',
+    PERMS: 'api_permissions'
 };
 
 const normalizePhone = (p) => { if (!p) return ""; const clean = p.toString().replace(/\D/g, ''); return clean.length >= 9 ? clean.slice(-9) : clean; };
@@ -233,14 +234,12 @@ app.get('/api/v1/sup/audits', authenticate, isMaster, async (req, res) => res.js
 app.post('/api/v1/sup/trust-device', authenticate, isMaster, async (req, res) => { if (!db) return res.status(503).send("Offline"); const snap = await db.ref(PATH.DNA + '/059_pending_approval_devices/' + req.body.deviceId).once('value'); if (snap.val()) { await db.ref(PATH.DNA + '/058_trusted_devices/' + req.body.deviceId).set(snap.val()); await db.ref(PATH.DNA + '/059_pending_approval_devices/' + req.body.deviceId).remove(); res.json({ message: "OK" }); } else res.status(404).send("Err"); });
 app.post('/api/v1/ops/track-view', authenticate, isSupport, async (req, res) => { await logForensic(req, "VIEW_PASS", req.body.targetPhone); res.json({ message: "OK" }); });
 
-// --- SUPREME MANAGEMENT APIs (FOR 127 NODES) ---
-
+// --- SUPREME MANAGEMENT APIs ---
 app.get('/api/v1/sup/empire-stats', authenticate, isSupport, async (req, res) => {
     if (!db) return res.json({ pendingCount: 0 });
     const snap = await db.ref(PATH.TX).orderByChild('080_status').equalTo('PENDING').once('value');
     res.json({ pendingCount: Object.keys(snap.val() || {}).length });
 });
-
 app.get('/api/v1/sup/ledger-sheet', authenticate, isMaster, async (req, res) => {
     if (!db) return res.json({});
     const wealth = (await db.ref(PATH.LEDGER + '/096_empire_verified_wealth_usd').once('value')).val() || 0;
@@ -248,14 +247,12 @@ app.get('/api/v1/sup/ledger-sheet', authenticate, isMaster, async (req, res) => 
     const liab = Object.values(users).reduce((s, u) => s + (parseFloat(u['064_balanceUSD']) || 0), 0);
     res.json({ empireUSD: parseFloat(wealth), liabilitiesUSD: liab });
 });
-
 app.get('/api/v1/sup/search-users', authenticate, isSupport, async (req, res) => {
     if (!db) return res.json({});
     const q = req.query.q;
     const snap = await db.ref(PATH.USERS).orderByKey().startAt(q).endAt(q + "\uf8ff").limitToFirst(20).once('value');
     res.json(snap.val() || {});
 });
-
 app.get('/api/v1/sup/user-dna/:phone', authenticate, isSupport, async (req, res) => {
     if (!db) return res.json({});
     const ph = normalizePhone(req.params.phone);
@@ -263,37 +260,14 @@ app.get('/api/v1/sup/user-dna/:phone', authenticate, isSupport, async (req, res)
     const txs = Object.values((await db.ref(PATH.TX).orderByChild('076_userId').equalTo(ph).limitToLast(10).once('value')).val() || {});
     res.json({ profile, transactions: txs.reverse() });
 });
+app.post('/api/v1/sup/set-allowance', authenticate, isSupport, async (req, res) => { if (db) await db.ref(PATH.USERS + '/' + normalizePhone(req.body.targetPhone)).update({ '066_dailyLimitUSD': parseFloat(req.body.allowance) }); res.json({ message: "OK" }); });
+app.post('/api/v1/sup/security-lockdown', authenticate, isSupport, async (req, res) => { if (db) await db.ref(PATH.USERS + '/' + normalizePhone(req.body.targetPhone)).update({ '065_status': req.body.block ? 'BLOCKED' : 'ACTIVE' }); res.json({ message: "OK" }); });
+app.get('/api/v1/sup/staff-directory', authenticate, isMaster, async (req, res) => { res.json({ activeStaff: db ? Object.keys((await db.ref(PATH.FORENSICS + '/104_staff_dossiers').once('value')).val() || {}) : [] }); });
+app.get('/api/v1/sup/staff-dna/:phone', authenticate, isMaster, async (req, res) => { if (!db) return res.json([]); const snap = await db.ref(PATH.FORENSICS + '/104_staff_dossiers/' + req.params.phone + '/actions').limitToLast(100).once('value'); res.json(Object.values(snap.val() || {}).reverse()); });
+app.get('/api/v1/sup/pending-devices', authenticate, isMaster, async (req, res) => { res.json(db ? (await db.ref(PATH.DNA + '/059_pending_approval_devices').once('value')).val() || {} : {}); });
+app.post('/api/v1/sys/simulate', authenticate, isMaster, async (req, res) => { await logForensic(req, "SIMULATOR_PULSE", "SYSTEM", { pulse: "TEST_ZAAD_SUCCESS" }); res.json({ message: "OK" }); });
 
-app.post('/api/v1/sup/set-allowance', authenticate, isSupport, async (req, res) => {
-    if (db) await db.ref(PATH.USERS + '/' + normalizePhone(req.body.targetPhone)).update({ '066_dailyLimitUSD': parseFloat(req.body.allowance) });
-    res.json({ message: "OK" });
-});
-
-app.post('/api/v1/sup/security-lockdown', authenticate, isSupport, async (req, res) => {
-    if (db) await db.ref(PATH.USERS + '/' + normalizePhone(req.body.targetPhone)).update({ '065_status': req.body.block ? 'BLOCKED' : 'ACTIVE' });
-    res.json({ message: "OK" });
-});
-
-app.get('/api/v1/sup/staff-directory', authenticate, isMaster, async (req, res) => {
-    res.json({ activeStaff: db ? Object.keys((await db.ref(PATH.FORENSICS + '/104_staff_dossiers').once('value')).val() || {}) : [] });
-});
-
-app.get('/api/v1/sup/staff-dna/:phone', authenticate, isMaster, async (req, res) => {
-    if (!db) return res.json([]);
-    const snap = await db.ref(PATH.FORENSICS + '/104_staff_dossiers/' + req.params.phone + '/actions').limitToLast(100).once('value');
-    res.json(Object.values(snap.val() || {}).reverse());
-});
-
-app.get('/api/v1/sup/pending-devices', authenticate, isMaster, async (req, res) => {
-    res.json(db ? (await db.ref(PATH.DNA + '/059_pending_approval_devices').once('value')).val() || {} : {});
-});
-
-app.post('/api/v1/sys/simulate', authenticate, isMaster, async (req, res) => {
-    await logForensic(req, "SIMULATOR_PULSE", "SYSTEM", { pulse: "TEST_ZAAD_SUCCESS" });
-    res.json({ message: "OK" });
-});
-
-// --- HTML PORTALS (INTEGRATED v1.9.7 SUPREME) ---
+// --- HTML PORTALS ---
 
 app.get('/master-vault', (req, res) => {
     let h = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>SARIFKEENA MASTER VAULT</title>';
@@ -302,8 +276,8 @@ app.get('/master-vault', (req, res) => {
     h += '<div id="login"><div class="card text-center" style="width:320px;"><h2 style="font-weight:900;color:var(--gold);">MASTER VAULT</h2><small class="text-muted">DB: '+dbStatus+'</small><input type="password" id="k" class="form-control text-center my-4 bg-dark text-white border-secondary" placeholder="MASTER KEY"><button onclick="doLogin()" class="btn btn-gold w-100 py-3">UNLOCK SYSTEM</button><div id="err" class="text-danger mt-2 small fw-bold"></div></div></div>';
     h += '<div id="ui" style="display:none;" class="container-fluid py-3"><header class="d-flex justify-content-between mb-3 px-2"><h4>SARIFKEENA <span style="color:var(--gold)">MASTER</span></h4><button onclick="location.reload()" class="btn btn-sm btn-outline-danger"><i class="fas fa-power-off"></i></button></header>';
     h += '<div class="row g-2 mb-4"><div class="col-4"><div class="stat-box"><h6>EMPIRE</h6><b id="s-bal" class="text-success">$0</b></div></div><div class="col-4"><div class="stat-box"><h6>OWED</h6><b id="s-liab" class="text-danger">$0</b></div></div><div class="col-4"><div class="stat-box"><h6>QUEUE</h6><b id="s-q" class="text-warning">0</b></div></div></div>';
-    h += '<ul class="nav nav-tabs shadow-sm mb-4" role="tablist"><li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-q">QUEUE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-act" onclick="refreshAct()">ACTIVATE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-u" onclick="refreshUsers()">USERS</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-f" onclick="refreshFeed()">FEED</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-fin" onclick="loadFin()">FINANCE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-staff" onclick="loadStaff()">STAFF</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dev" onclick="loadDev()">DEVICES</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-m">MASTERY</a></li></ul>';
-    h += '<div class="tab-content pt-2"><div class="tab-pane fade show active" id="tab-q"><div id="q-list"></div></div><div class="tab-pane fade" id="tab-act"><div id="act-list"></div></div><div class="tab-pane fade" id="tab-u"><div class="d-flex gap-2 mb-3"><input type="text" id="us" class="form-control bg-dark text-white border-secondary" placeholder="Search 63..."><button onclick="searchUsers()" class="btn btn-gold"><i class="fas fa-search"></i></button></div><div id="u-list"></div></div><div class="tab-pane fade" id="tab-f"><div id="feed-list" style="max-height:70vh;overflow-y:auto;"></div></div><div class="tab-pane fade" id="tab-fin"><div id="fin-summary"></div><hr><h6 class="text-muted small fw-bold">SHIFT HISTORY</h6><div id="audit-history"></div></div><div class="tab-pane fade" id="tab-staff"><div id="staff-box"></div></div><div class="tab-pane fade" id="tab-dev"><div id="dev-list"></div></div><div class="tab-pane fade" id="tab-m"><div class="card"><h6>STEALTH & BRANDING</h6><button onclick="toggleGhost()" class="btn btn-warning w-100 mb-2">TOGGLE GHOST MODE</button><input type="text" id="h-txt" class="form-control mb-2 bg-dark text-white border-secondary" placeholder="Update Heading"><button onclick="saveLogo()" class="btn btn-gold btn-sm w-100">SAVE BRANDING</button></div><div class="card"><h6>SIMULATOR</h6><textarea id="sim-sms" class="form-control mb-2 bg-dark text-white border-secondary" placeholder="Paste SMS Sample"></textarea><button onclick="runSim()" class="btn btn-outline-info w-100">RUN TEST PULSE</button></div></div></div></div>';
+    h += '<ul class="nav nav-tabs shadow-sm mb-4" role="tablist"><li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-q">QUEUE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-act" onclick="refreshAct()">ACTIVATE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-u" onclick="refreshUsers()">USERS</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-f" onclick="refreshFeed()">FEED</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-fin" onclick="loadFin()">FINANCE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-staff" onclick="loadStaff()">STAFF</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-sync" onclick="loadSync()">SYNC ROOM</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-sec" onclick="loadSec()">SECURITY</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dev" onclick="loadDev()">DEVICES</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-m" onclick="loadMastery()">MASTERY</a></li></ul>';
+    h += '<div class="tab-content pt-2"><div class="tab-pane fade show active" id="tab-q"><div id="q-list"></div></div><div class="tab-pane fade" id="tab-act"><div id="act-list"></div></div><div class="tab-pane fade" id="tab-u"><div class="d-flex gap-2 mb-3"><input type="text" id="us" class="form-control bg-dark text-white border-secondary" placeholder="Search 63..."><button onclick="searchUsers()" class="btn btn-gold"><i class="fas fa-search"></i></button></div><div id="u-list"></div></div><div class="tab-pane fade" id="tab-f"><div id="feed-list" style="max-height:70vh;overflow-y:auto;"></div></div><div class="tab-pane fade" id="tab-fin"><div id="fin-summary"></div><hr><h6 class="text-muted small fw-bold">SHIFT HISTORY</h6><div id="audit-history"></div></div><div class="tab-pane fade" id="tab-staff"><div id="staff-box"></div></div><div class="tab-pane fade" id="tab-sync"><div id="sync-box"></div></div><div class="tab-pane fade" id="tab-sec"><div id="sec-box"></div></div><div class="tab-pane fade" id="tab-dev"><div id="dev-list"></div></div><div class="tab-pane fade" id="tab-m"><div id="mastery-box"></div></div></div></div>';
     h += '<div class="modal fade" id="mdl" tabindex="-1"><div class="modal-dialog modal-fullscreen-sm-down"><div class="modal-content bg-dark border-secondary"><div class="modal-header border-secondary text-white"><h5 id="mdl-title">Dossier</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body" id="mdl-body"></div><div class="modal-footer border-secondary justify-content-between" id="mdl-foot"></div></div></div></div>';
     h += '<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>';
     h += '<script>let t="";let curUser="";async function doLogin(){const p=document.getElementById("k").value;const res=await fetch("/api/v1/user/auth-access",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phoneNumber:"eesi",password:p,mode:"login",deviceId:"MASTER_WEB"})});const d=await res.json();if(d.token&&d.role==="MASTER"){t="Bearer "+d.token;document.getElementById("login").style.display="none";document.getElementById("ui").style.display="block";fetchQ();loadStats();}else{alert("Denied");}}';
@@ -326,6 +300,14 @@ app.get('/master-vault', (req, res) => {
     h += 'async function openStaffDNA(s){const res=await fetch("/api/v1/sup/staff-dna/"+s,{headers:{"Authorization":t}});const lgs=await res.json();document.getElementById("mdl-title").innerText="Staff Activity: "+s;document.getElementById("mdl-body").innerHTML=lgs.map(l=>\'<div class="forensic-log"><b>\'+l.action+\'</b><br><small>\'+l.target+\' | \'+l.ts?.slice(11,19)+\'</small><br><small class="text-muted">\'+l.dna+\'</small></div>\').join("");document.getElementById("mdl-foot").innerHTML="";new bootstrap.Modal(document.getElementById("mdl")).show();}';
     h += 'async function loadDev(){const res=await fetch("/api/v1/sup/pending-devices",{headers:{"Authorization":t}});const ds=await res.json();document.getElementById("dev-list").innerHTML=Object.entries(ds).map(([id,d])=>\'<div class="card d-flex flex-row justify-content-between align-items-center"><div><b>\'+d.role+\'</b><br><small>\'+id.slice(0,12)+\'...</small></div><button onclick="trustDev(\\\'\'+id+\'\\\')" class="btn btn-success btn-sm">TRUST</button></div>\').join("")||"<p class=\'text-center mt-5\'>Clear</p>";}';
     h += 'async function trustDev(id){await fetch("/api/v1/sup/trust-device",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({deviceId:id})});loadDev();}';
+    h += 'async function loadSync(){const res=await fetch("/api/config",{headers:{"Authorization":t}});const c=await res.json();const sync=c.sync_room||{};const buf=sync.pulse_buffer||{};const ver=c.verification_engine||{};document.getElementById("sync-box").innerHTML=\'<div class="card"><h6>BATCH BUFFER</h6>\'+Object.values(buf).map(b=>\'<div class="forensic-log"><b>\'+b.ph+\'</b> | \'+b.amtSLSH+\' SLSH<br><small>Ref: \'+b.refId+\'</small></div>\').join("")+\'</div><div class="card"><h6>ENGINE STATUS</h6><p>Baseline: \'+ver[\'023_lastKnownBaselineBalanceSLSH\']+\'</p><p>Batch Limit: \'+ver[\'026_batchSyncLimit\']+\'</p><p>Lag Delay: \'+ver[\'030_networkLagDelaySeconds\']+\'s</p></div>\';}';
+    h += 'async function loadLogic(){const res=await fetch("/api/config",{headers:{"Authorization":t}});const c=await res.json();const log=c.system_logic||{};const per=c.api_permissions||{};document.getElementById("logic-box").innerHTML=\'<div class="card"><h6>SYSTEM LOGIC (127 Keys)</h6><p>Version: \'+c.system_branding?.[\'012_systemVersion\']+\'</p><p>Rates: \'+log[\'015_depositRateSLSH\']+\' / \'+log[\'016_withdrawRateSLSH\']+\'</p><p>Nuclear Freeze: \'+log[\'019_nuclearFreeze\']+\'</p><p>Safety Web: \'+log[\'021_safetyWebActive\']+\'</p><p>Maintenance: \'+log[\'018_maintenanceMode\']+\'</p></div><div class="card"><h6>API PERMISSIONS</h6><p>1xBet Auto: \'+per[\'126_1xbet_recharge\']?.auto+\'</p><p>Withdraw Auto: \'+per[\'127_withdrawals\']?.auto+\'</p></div>\';}';
+    h += 'async function loadSec(){const res=await fetch("/api/admin/global-forensics",{headers:{"Authorization":t}});const lgs=await res.json();const alerts=lgs.filter(l=>l.action?.includes("ALERT")||l.action?.includes("ERR")||l.action?.includes("DRIFT")||l.action?.includes("DNA"));document.getElementById("sec-box").innerHTML=alerts.map(l=>\'<div class="forensic-log border-danger"><b>\'+l.action+\'</b><br><small>\'+l.actor+\' | \'+l.ts?.slice(11,19)+\'</small><br><small class="text-danger">\'+l.target+\'</small></div>\').join("")||"<p class=\'text-center mt-5\'>Security Secure</p>";}';
+    h += 'async function loadMastery(){const res=await fetch("/api/config",{headers:{"Authorization":t}});const c=await res.json();const br=c.system_branding||{};document.getElementById("mastery-box").innerHTML=\'<div class="card"><h6>BRANDING & MEDIA</h6><input type="text" id="h-txt" class="form-control mb-1 bg-dark text-white" value="\'+br[\'001_headingText\']+\'"><input type="text" id="w-url" class="form-control mb-1 bg-dark text-white" placeholder="Wallpaper URL" value="\'+br[\'003_wallpaperUrl\']+\'"><input type="text" id="p-url" class="form-control mb-1 bg-dark text-white" placeholder="Promo URL" value="\'+br[\'004_promoImageUrl\']+\'"><button onclick="saveB()" class="btn btn-gold btn-sm w-100">SAVE MEDIA</button></div><div class="card"><h6>BANK GATEWAYS</h6>\'+Object.entries(c.gateways||{}).map(([id,g])=>\'<div class="border-bottom border-secondary p-1 mb-2"><b>\'+id.toUpperCase()+\'</b><input type="text" id="num-\'+id+\'" class="form-control form-control-sm bg-dark text-white mb-1" value="\'+g[\'034_targetNumber\']+\'"><input type="text" id="ussd-\'+id+\'" class="form-control form-control-sm bg-dark text-white mb-1" value="\'+g[\'033_ussd\']+\'"><button onclick="saveG(\\\'\'+id+\'\\\')" class="btn btn-outline-warning btn-sm w-100">UPDATE \'+id.toUpperCase()+\'</button></div>\').join("")+\'</div><div class="card"><h6>SIMULATOR</h6><button onclick="runSim()" class="btn btn-outline-info w-100">RUN TEST PULSE</button></div><div class="card"><h6>SYSTEM RESET</h6><input type="number" id="seq-val" class="form-control mb-1 bg-dark text-white" placeholder="New Counter #"><button onclick="resetSeq()" class="btn btn-danger btn-sm w-100">RESET SERIAL</button></div>\';}';
+    h += 'async function saveB(){const h=document.getElementById("h-txt").value;const w=document.getElementById("w-url").value;const p=document.getElementById("p-url").value;await fetch("/api/v1/sup/update-config",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({system_branding:{\\\'001_headingText\\\':h, \\\'003_wallpaperUrl\\\':w, \\\'004_promoImageUrl\\\':p}})});alert("Branding Saved");}';
+    h += 'async function saveG(id){const num=document.getElementById("num-"+id).value;const ussd=document.getElementById("ussd-"+id).value;await fetch("/api/v1/sup/update-config",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({gateways:{[id]:{\\\'034_targetNumber\\\':num, \\\'033_ussd\\\':ussd}}})});alert("Gateway Updated");}';
+    h += 'async function resetSeq(){const val=document.getElementById("seq-val").value;await fetch("/api/v1/sup/update-config",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({ledger:{\\\'097_receipt_counter\\\':parseInt(val)}})});alert("Counter Reset");}';
+    h += 'async function runSim(){await fetch("/api/v1/sys/simulate",{method:"POST",headers:{"Authorization":t}});alert("Simulated Pulse Sent");}';
     h += 'setInterval(()=>{if(t)fetchQ();},20000);</script></body></html>';
     res.send(h);
 });
@@ -338,9 +320,9 @@ app.get('/staff-panel', (req, res) => {
     h += '<div id="ui" style="display:none;" class="container py-3"><h4>STAFF PANEL</h4><ul class="nav nav-tabs mb-3"><li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#sq">QUEUE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#sact" onclick="refAct()">ACTIVATE</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#saud">AUDIT</a></li></ul>';
     h += '<div class="tab-content"><div class="tab-pane fade show active" id="sq"><div id="sq-list"></div></div><div class="tab-pane fade" id="sact"><div id="sact-list"></div></div><div class="tab-pane fade" id="saud"><div class="card"><h6>SHIFT AUDIT REPORT</h6><input type="number" id="a1" class="form-control mb-2 bg-dark text-white border-secondary" placeholder="Start Wallet $"><input type="number" id="a2" class="form-control mb-2 bg-dark text-white border-secondary" placeholder="Total Deposits $"><input type="number" id="a3" class="form-control mb-2 bg-dark text-white border-secondary" placeholder="Total Withdraws $"><button onclick="subAudit()" class="btn btn-green w-100">SUBMIT & SIGN</button></div></div></div></div>';
     h += '<script>let t="";async function doLogin(){const p=document.getElementById("k").value;const res=await fetch("/api/v1/user/auth-access",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phoneNumber:"maamulka",password:p,mode:"login",deviceId:"STAFF_WEB"})});const d=await res.json();if(d.token){t="Bearer "+d.token;document.getElementById("login").style.display="none";document.getElementById("ui").style.display="block";sFetchQ();}else{alert("Denied");}}';
-    h += 'async function sFetchQ(){const res=await fetch("/api/admin/transactions",{headers:{"Authorization":t}});const txs=await res.json();document.getElementById("sq-list").innerHTML=Object.entries(txs).reverse().map(([id,x])=>x[\'080_status\']==="PENDING"?\'<div class="card d-flex flex-row justify-content-between"><div><b>$ \'+x[\'078_amountUSD\']+\'</b><br><small>6\'+x[\'076_userId\']?.slice(-8)+\'</small></div><button onclick="sApp(\\\'\"+id+\"\\\')" class="btn btn-green btn-sm px-3">OK</button></div>\':"").join("");}';
+    h += 'async function sFetchQ(){const res=await fetch("/api/admin/transactions",{headers:{"Authorization":t}});const txs=await res.json();document.getElementById("sq-list").innerHTML=Object.entries(txs).reverse().map(([id,x])=>x[\'080_status\']==="PENDING"?\'<div class="card d-flex flex-row justify-content-between\"><div><b>$ \'+x[\'078_amountUSD\']+\'</b><br><small>6\'+x[\'076_userId\']?.slice(-8)+\'</small></div><button onclick="sApp(\\\'\"+id+\"\\\')" class="btn btn-green btn-sm px-3\">OK</button></div>\':"").join("");}';
     h += 'async function sApp(id){await fetch("/api/v1/queue/update-state",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({transactionId:id,status:"APPROVED"})});sFetchQ();}';
-    h += 'async function refAct(){const res=await fetch("/api/admin/all-users",{headers:{"Authorization":t}});const us=await res.json();document.getElementById("sact-list").innerHTML=Object.entries(us).filter(u=>u[1][\'065_status\']==="PENDING").map(([ph,u])=>\'<div class="card d-flex flex-row justify-content-between"><b>6\'+ph.slice(-8)+\'</b><button onclick="sActUser(\\\'\"+ph+\"\\\')" class="btn btn-green btn-sm">OK</button></div>\').join("");}';
+    h += 'async function refAct(){const res=await fetch("/api/admin/all-users",{headers:{"Authorization":t}});const us=await res.json();document.getElementById("sact-list").innerHTML=Object.entries(us).filter(u=>u[1][\'065_status\']==="PENDING").map(([ph,u])=>\'<div class="card d-flex flex-row justify-content-between\"><b>6\'+ph.slice(-8)+\'</b><button onclick="sActUser(\\\'\"+ph+\"\\\')" class="btn btn-green btn-sm">OK</button></div>\').join("");}';
     h += 'async function sActUser(ph){await fetch("/api/admin/user/activate",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({targetPhone:ph})});refAct();}';
     h += 'async function subAudit(){await fetch("/api/v1/sup/audit-lock",{method:"POST",headers:{"Authorization":t,"Content-Type":"application/json"},body:JSON.stringify({startUSD:document.getElementById("a1").value,inUSD:document.getElementById("a2").value,outUSD:document.getElementById("a3").value})});alert("Audit Signed.");}</script></body></html>';
     res.send(h);
