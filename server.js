@@ -23,7 +23,7 @@ try {
             databaseURL: process.env.FIREBASE_DATABASE_URL
         });
         db = admin.database();
-        console.log("✅ v1.9.6 SUPREME BRAIN ONLINE (Sarifkeena Bifurcation).");
+        console.log("✅ v1.9.6 SUPREME EMPIRE READY.");
     }
 } catch (error) { console.error("❌ DB Error:", error.message); }
 
@@ -85,19 +85,17 @@ const authenticate = async (req, res, next) => {
     jwt.verify(token, SECRET_KEY, async (err, user) => {
         if (err) return res.sendStatus(403);
 
-        if (user.role === 'MASTER' || user.role === 'SUPPORT') {
+        if (user.role === 'MASTER' || user.role === 'SUPPORT' || user.role === 'LISTENER') {
             const trustSnap = await db.ref('config/trusted_devices').once('value');
             const trusted = trustSnap.val() || {};
             const isTrustEmpty = Object.keys(trusted).length === 0;
 
             if (!isTrustEmpty) {
-                const currentIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
                 if (!trusted[user.deviceId]) {
                     return res.status(403).json({ message: "Untrusted Device DNA" });
                 }
             }
         }
-
         req.user = user;
         next();
     });
@@ -105,7 +103,7 @@ const authenticate = async (req, res, next) => {
 
 const isSupport = (req, res, next) => {
     if (req.user && (req.user.role === 'MASTER' || req.user.role === 'SUPPORT')) next();
-    else res.status(403).json({ message: "Staff Only" });
+    else res.status(403).json({ message: "Denied" });
 };
 
 const isMaster = (req, res, next) => {
@@ -113,7 +111,7 @@ const isMaster = (req, res, next) => {
     else res.status(403).json({ message: "Master Only" });
 };
 
-// --- MASTER VAULT (ID 2/33 SPLIT) ---
+// --- MASTER VAULT ---
 app.get('/master-vault', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -153,22 +151,24 @@ app.get('/master-vault', (req, res) => {
                     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-act" onclick="refreshActivations()">ACTIVATE</a></li>
                     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-f" onclick="refreshFeed()">FEED</a></li>
                     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-finance" onclick="loadFinance()">FINANCE</a></li>
+                    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-staff" onclick="loadStaff()">STAFF</a></li>
                     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-d" onclick="refreshDevices()">DEVICES</a></li>
-                    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-m">SYSTEM</a></li>
+                    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-frauds" onclick="loadFrauds()">FRAUDS</a></li>
                 </ul>
                 <div class="tab-content">
                     <div class="tab-pane fade show active" id="tab-q"><div id="q-list"></div></div>
                     <div class="tab-pane fade" id="tab-act"><div id="act-list"></div></div>
                     <div class="tab-pane fade" id="tab-f"><div id="feed-list"></div></div>
                     <div class="tab-pane fade" id="tab-finance"><div id="fin-box"></div></div>
-                    <div class="tab-pane fade" id="tab-d"><div id="dev-list"></div></div>
-                    <div class="tab-pane fade" id="tab-m">
-                         <div class="glass-card">
-                            <button onclick="toggleGhost()" class="btn btn-outline-warning w-100 mb-2">TOGGLE GHOST MODE</button>
-                            <input type="number" id="seq-val" class="form-control mb-2" placeholder="New Sequence #">
-                            <button onclick="resetSeq()" class="btn btn-outline-light w-100">RESET SERIAL #</button>
-                         </div>
+                    <div class="tab-pane fade" id="tab-staff"><div id="staff-box"></div></div>
+                    <div class="tab-pane fade" id="tab-d">
+                        <div class="glass-card d-flex justify-content-between mb-4">
+                            <b>DNA REGISTRY STATUS</b>
+                            <button onclick="lockRegistry()" class="btn btn-sm btn-outline-danger" id="reg-lock-btn">LOCK REGISTRY</button>
+                        </div>
+                        <div id="dev-list"></div>
                     </div>
+                    <div class="tab-pane fade" id="tab-frauds"><div id="fraud-list"></div></div>
                 </div>
             </div>
         </div>
@@ -193,7 +193,10 @@ app.get('/master-vault', (req, res) => {
                 const res = await fetch('/api/admin/transactions', {headers: {'Authorization': token}});
                 const txs = await res.json();
                 document.getElementById('q-list').innerHTML = Object.entries(txs).reverse().map(([id, t]) =>
-                    t.status==='PENDING' ? \`<div class="glass-card d-flex justify-content-between align-items-center"><div><b>$ \${t.amountUSD}</b><br><small class="text-muted">\${t.type}</small></div><button onclick="approve('\${id}')" class="btn btn-master btn-sm px-4">OK</button></div>\` : '').join('') || '<p class="text-center mt-5">Vault Clear</p>';
+                    \`<div class="glass-card d-flex justify-content-between align-items-center">
+                        <div><b>$ \${t.amountUSD}</b><br><small class="text-muted">\${t.type} | 6\${t.userId?.slice(-8)}</small><br><span class="badge \${t.status==='APPROVED'?'bg-success':'bg-warning'}">\${t.status}</span></div>
+                        \${t.status==='PENDING' ? \`<button onclick="approve('\${id}')" class="btn btn-master btn-sm px-4">OK</button>\` : ''}
+                    </div>\`).join('') || '<p class="text-center mt-5">Vault Clear</p>';
             }
             async function approve(id) {
                 await fetch('/api/v1/queue/update-state', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({transactionId:id, status:'APPROVED'})});
@@ -211,16 +214,35 @@ app.get('/master-vault', (req, res) => {
                     <div class="glass-card text-center"><div class="text-muted small">EMPIRE BALANCE</div><h2 class="text-success">$ \${d.empireUSD?.toFixed(2)}</h2></div>
                     <div class="glass-card text-center"><div class="text-muted small">USER LIABILITIES</div><h2 class="text-danger">$ \${d.liabilitiesUSD?.toFixed(2)}</h2></div>\`;
             }
+            async function loadStaff() {
+                const res = await fetch('/api/v1/sup/staff-directory', {headers:{'Authorization':token}});
+                const d = await res.json();
+                document.getElementById('staff-box').innerHTML = d.activeStaff.map(s => \`
+                    <div class="glass-card d-flex justify-content-between align-items-center" onclick="loadStaffDna('\${s}')">
+                        <b>\${s}</b><i class="fas fa-chevron-right"></i>
+                    </div>\`).join('');
+            }
+            async function loadStaffDna(ph) {
+                const res = await fetch('/api/v1/sup/staff-dna/'+ph, {headers:{'Authorization':token}});
+                const logs = await res.json();
+                alert("Dossier for "+ph+": "+logs.length+" actions today.");
+            }
             async function refreshDevices() {
                 const res = await fetch('/api/v1/sup/pending-devices', {headers: {'Authorization': token}});
                 const devs = await res.json();
                 document.getElementById('dev-list').innerHTML = Object.entries(devs).map(([id, d]) => \`
                     <div class="glass-card d-flex justify-content-between align-items-center">
-                        <div><b>\${d.role} DNA</b><br><small class="text-muted">\${id.slice(0,10)}...</small></div>
-                        <button onclick="trust('\${id}')" class="btn btn-success btn-sm">TRUST</button>
+                        <div><b>\${d.role} DNA Attempt</b><br><small class="text-muted">DNA: \${id.slice(0,12)}...</small></div>
+                        <button onclick="trust('\${id}')" class="btn btn-success btn-sm px-4">TRUST</button>
                     </div>\`).join('') || '<p class="text-center mt-5">No Pending DNA</p>';
             }
             async function trust(id) { await fetch('/api/v1/sup/trust-device', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({deviceId:id})}); refreshDevices(); }
+            async function loadFrauds() {
+                const res = await fetch('/api/admin/fraud-alerts', {headers:{'Authorization':token}});
+                const alerts = await res.json();
+                document.getElementById('fraud-list').innerHTML = Object.values(alerts).map(a => \`
+                    <div class="glass-card border-danger"><b>\${a.type}</b><br><small>\${a.details}</small></div>\`).join('') || '<p class="text-center mt-5">System Safe</p>';
+            }
             setInterval(() => { if(token) fetchQueue(); }, 20000);
         </script>
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -229,7 +251,7 @@ app.get('/master-vault', (req, res) => {
     `);
 });
 
-// --- STAFF TERMINAL (ID 2/33 SPLIT) ---
+// --- STAFF PANEL ---
 app.get('/staff-panel', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -264,18 +286,25 @@ app.get('/staff-panel', (req, res) => {
                 <ul class="nav nav-tabs" role="tablist">
                     <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#q">QUEUE</a></li>
                     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#act" onclick="refreshActivations()">ACTIVATE</a></li>
+                    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-search" onclick="refreshUsers()">SEARCH</a></li>
                     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#audit">AUDIT</a></li>
                 </ul>
                 <div class="tab-content">
                     <div class="tab-pane show active" id="q"><div id="q-list"></div></div>
                     <div class="tab-pane" id="act"><div id="act-list"></div></div>
+                    <div class="tab-pane" id="tab-search">
+                         <div class="d-flex gap-2 mb-3"><input type="text" id="s" class="form-control"><button onclick="doSearch()" class="btn btn-supreme">SEARCH</button></div>
+                         <div id="u-list"></div>
+                    </div>
                     <div class="tab-pane" id="audit">
                         <div class="glass-card">
-                            <h6>SHIFT CALCULATOR</h6>
-                            <input type="number" id="s1" class="form-control mb-2" placeholder="Start USD">
-                            <input type="number" id="s2" class="form-control mb-2" placeholder="In USD">
-                            <input type="number" id="s3" class="form-control mb-2" placeholder="Out USD">
-                            <button onclick="alert('Signed & Locked')" class="btn btn-supreme w-100">SUBMIT & LOGOUT</button>
+                            <h6 class="mb-3">6-FIELD SHIFT LOCK</h6>
+                            <input type="number" id="a1" class="form-control mb-2" placeholder="Start USD">
+                            <input type="number" id="a2" class="form-control mb-2" placeholder="In USD">
+                            <input type="number" id="a3" class="form-control mb-2" placeholder="Out USD">
+                            <input type="number" id="a4" class="form-control mb-2" placeholder="Liabilities USD">
+                            <input type="number" id="a5" class="form-control mb-2" placeholder="Staff Cash (SLSH)">
+                            <button onclick="lockAudit()" class="btn btn-supreme w-100">SUBMIT & LOCK</button>
                         </div>
                     </div>
                 </div>
@@ -304,19 +333,15 @@ app.get('/staff-panel', (req, res) => {
                 document.getElementById('q-list').innerHTML = Object.entries(txs).reverse().map(([id, t]) =>
                     t.status==='PENDING' ? \`<div class="glass-card d-flex justify-content-between align-items-center"><div><b>$ \${t.amountUSD}</b><br><small>\${t.type}</small></div><button onclick="approve('\${id}')" class="btn btn-supreme btn-sm">OK</button></div>\` : '').join('');
             }
-            async function approve(id) {
-                await fetch('/api/v1/queue/update-state', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({transactionId:id, status:'APPROVED'})});
-                fetchQueue();
-            }
+            async function approve(id) { await fetch('/api/v1/queue/update-state', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({transactionId:id, status:'APPROVED'})}); fetchQueue(); }
             async function refreshActivations() {
                 const res = await fetch('/api/admin/all-users', {headers: {'Authorization': token}});
                 const users = await res.json();
                 document.getElementById('act-list').innerHTML = Object.entries(users).filter(u => u[1].status === 'PENDING').map(([ph, u]) => \`
-                    <div class="glass-card d-flex justify-content-between align-items-center">
-                        <div><b>6\${ph.slice(-8)}</b></div><button onclick="act('\${ph}')" class="btn btn-supreme btn-sm">ACTIVATE</button>
-                    </div>\`).join('');
+                    <div class="glass-card d-flex justify-content-between align-items-center"><b>6\${ph.slice(-8)}</b><button onclick="act('\${ph}')" class="btn btn-supreme btn-sm">ACTIVATE</button></div>\`).join('');
             }
             async function act(ph) { await fetch('/api/admin/user/activate', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({targetPhone:ph})}); refreshActivations(); }
+            async function lockAudit() { alert('Shift Saved'); location.reload(); }
             setInterval(() => { if(token) fetchQueue(); }, 30000);
         </script>
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -325,14 +350,20 @@ app.get('/staff-panel', (req, res) => {
     `);
 });
 
-// --- CORE API (ID 3 REFINED: eesi username) ---
+// --- CORE API REGISTRY (42 APIs - REMAINDER) ---
+
 app.post('/api/v1/user/auth-access', async (req, res) => {
     try {
         const { phoneNumber, password, mode, deviceId } = req.body;
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-        if (deviceId && (phoneNumber === 'eesi' || phoneNumber === 'maamulka' || phoneNumber === 'maamulka_2')) {
-            await db.ref('config/pending_devices/' + deviceId).set({ role: phoneNumber, ip: clientIp, ts: new Date().toISOString() });
+        const configSnap = await db.ref('config').once('value');
+        const config = configSnap.val() || {};
+
+        if (deviceId && !config.registryLocked) {
+            if (phoneNumber === 'eesi' || phoneNumber === 'maamulka' || phoneNumber === 'maamulka_2' || phoneNumber === 'sensor_primary') {
+                await db.ref('config/pending_devices/' + deviceId).set({ role: phoneNumber, ip: clientIp, ts: new Date().toISOString() });
+            }
         }
 
         if (phoneNumber === 'eesi' && password === MASTER_PASS) {
@@ -346,33 +377,88 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
                 return res.json({ token, role: 'SUPPORT' });
             }
         }
+        if (phoneNumber === 'sensor_primary' && password === LISTENER_PASS) {
+            const token = jwt.sign({ phoneNumber: 'sensor_primary', role: 'LISTENER', ip: clientIp, deviceId }, SECRET_KEY, { expiresIn: '30d' });
+            return res.json({ token, role: 'LISTENER' });
+        }
+
         const cleanPhone = normalizePhone(phoneNumber);
         const userRef = db.ref('users/' + cleanPhone);
         const snap = await userRef.once('value');
         const user = snap.val();
         if (mode === 'register') {
             if (user) return res.status(400).json({ message: "Exists" });
-            const uid = "SK-" + Math.random().toString(36).substr(2, 6).toUpperCase();
-            await userRef.set({ uid, phoneNumber: cleanPhone, password, balance: 0.0, status: 'PENDING', deviceId, createdAt: new Date().toISOString(), dailyLimitUSD: 100.0 });
-            return res.json({ message: "PENDING", uid });
+            await userRef.set({ phoneNumber: cleanPhone, password, balance: 0.0, status: 'PENDING', createdAt: new Date().toISOString() });
+            return res.json({ message: "PENDING" });
         } else {
             if (!user) return res.status(404).json({ message: "None" });
             if (user.password !== password) return res.status(401).json({ message: "Fail" });
-            const token = jwt.sign({ phoneNumber: cleanPhone, uid: user.uid, role: 'USER' }, SECRET_KEY, { expiresIn: '30d' });
-            return res.json({ token, uid: user.uid, role: 'USER' });
+            const token = jwt.sign({ phoneNumber: cleanPhone, role: 'USER' }, SECRET_KEY, { expiresIn: '30d' });
+            return res.json({ token, role: 'USER' });
         }
     } catch (e) { res.status(500).json({ message: "Auth Error" }); }
 });
 
-// --- ALL REMAINING APIS (4-32, 34-42) RESTORED & LOCKED ---
 app.get('/api/admin/transactions', authenticate, isSupport, async (req, res) => {
     const snap = await db.ref('transactions').limitToLast(100).once('value');
     res.json(snap.val() || {});
 });
+
 app.get('/api/admin/all-users', authenticate, isSupport, async (req, res) => {
     const snap = await db.ref('users').once('value');
     res.json(snap.val() || {});
 });
+
+app.get('/api/admin/global-forensics', authenticate, isSupport, async (req, res) => {
+    const snap = await db.ref('global_forensics').limitToLast(50).once('value');
+    res.json(Object.values(snap.val() || {}).reverse());
+});
+
+app.get('/api/v1/sup/user-dna/:phone', authenticate, isSupport, async (req, res) => {
+    const ph = normalizePhone(req.params.phone);
+    const u = await db.ref('users/' + ph).once('value');
+    const tx = await db.ref('transactions').orderByChild('userId').equalTo(ph).limitToLast(10).once('value');
+    res.json({ profile: u.val(), transactions: Object.values(tx.val() || {}).reverse() });
+});
+
+app.get('/api/v1/sup/ledger-sheet', authenticate, isMaster, async (req, res) => {
+    const vSnap = await db.ref('ledger/verified_balance').once('value');
+    const uSnap = await db.ref('users').once('value');
+    const users = Object.values(uSnap.val() || {});
+    const totalLiab = users.reduce((sum, u) => sum + (u.balance || 0), 0);
+    res.json({ empireUSD: parseFloat(vSnap.val() || 0), liabilitiesUSD: totalLiab });
+});
+
+app.get('/api/v1/sup/staff-directory', authenticate, isMaster, async (req, res) => {
+    const snap = await db.ref('staff_activity').once('value');
+    res.json({ activeStaff: Object.keys(snap.val() || {}) });
+});
+
+app.get('/api/v1/sup/staff-dna/:phone', authenticate, isMaster, async (req, res) => {
+    const snap = await db.ref(\`staff_activity/\${req.params.phone}\`).limitToLast(100).once('value');
+    res.json(Object.values(snap.val() || {}).reverse());
+});
+
+app.get('/api/v1/sup/pending-devices', authenticate, isMaster, async (req, res) => {
+    const snap = await db.ref('config/pending_devices').once('value');
+    res.json(snap.val() || {});
+});
+
+app.post('/api/v1/sup/trust-device', authenticate, isMaster, async (req, res) => {
+    const { deviceId } = req.body;
+    const snap = await db.ref('config/pending_devices/' + deviceId).once('value');
+    if (snap.val()) {
+        await db.ref('config/trusted_devices/' + deviceId).set(snap.val());
+        await db.ref('config/pending_devices/' + deviceId).remove();
+        res.json({ message: "OK" });
+    } else res.status(404).send("Err");
+});
+
+app.get('/api/admin/fraud-alerts', authenticate, isMaster, async (req, res) => {
+    const snap = await db.ref('fraud_alerts').limitToLast(50).once('value');
+    res.json(snap.val() || {});
+});
+
 app.post('/api/v1/queue/update-state', authenticate, isSupport, async (req, res) => {
     const { transactionId, status } = req.body;
     const txRef = db.ref('transactions/' + transactionId);
@@ -382,34 +468,26 @@ app.post('/api/v1/queue/update-state', authenticate, isSupport, async (req, res)
         const uRef = db.ref('users/' + txData.userId);
         const uSnap = await uRef.once('value');
         const oldBal = uSnap.val().balance || 0;
-        const iRef = await getNextImperialRef();
         const isIntake = !txData.type.toLowerCase().includes("withdraw");
         const nBal = isIntake ? oldBal + txData.amountUSD : oldBal - txData.amountUSD;
+        const iRef = await getNextImperialRef();
         await uRef.update({ balance: nBal });
-        await txRef.update({ status: 'APPROVED', approvedBy: req.user.phoneNumber, prevBalance: oldBal, newBalance: nBal, imperialRef: iRef, approvalTime: new Date().toISOString() });
-        await logBalanceChange(txData.userId, txData.amountUSD, isIntake ? 'CREDIT' : 'DEBIT', oldBal, nBal, txData.type, req.user.phoneNumber);
+        await txRef.update({ status: 'APPROVED', approvedBy: req.user.phoneNumber, prevBalance: oldBal, newBalance: nBal, imperialRef: iRef });
+        await updateVerifiedBalance(txData.amountUSD, isIntake ? 'ADD' : 'SUB');
+        await logForensic(req, "APPROVE_TX", txData.userId, { amount: txData.amountUSD });
     }
     res.json({ message: "OK" });
 });
+
 app.post('/api/admin/user/activate', authenticate, isSupport, async (req, res) => {
     await db.ref('users/' + req.body.targetPhone).update({ status: 'ACTIVE' });
+    await logForensic(req, "ACTIVATE_USER", req.body.targetPhone);
     res.json({ message: "OK" });
 });
-app.get('/api/v1/sup/ledger-sheet', authenticate, isMaster, async (req, res) => {
-    const vSnap = await db.ref('ledger/verified_balance').once('value');
-    const uSnap = await db.ref('users').once('value');
-    const totalLiab = Object.values(uSnap.val() || {}).reduce((sum, u) => sum + (u.balance || 0), 0);
-    res.json({ empireUSD: parseFloat(vSnap.val() || 0), liabilitiesUSD: totalLiab });
-});
-app.get('/api/v1/sup/pending-devices', authenticate, isMaster, async (req, res) => {
-    const snap = await db.ref('config/pending_devices').once('value');
-    res.json(snap.val() || {});
-});
-app.post('/api/v1/sup/trust-device', authenticate, isMaster, async (req, res) => {
-    const { deviceId } = req.body;
-    const snap = await db.ref('config/pending_devices/' + deviceId).once('value');
-    if (snap.val()) { await db.ref('config/trusted_devices/' + deviceId).set(snap.val()); await db.ref('config/pending_devices/' + deviceId).remove(); res.json({ message: "OK" }); }
-    else res.status(404).send("Err");
+
+app.post('/api/v1/sup/update-config', authenticate, isMaster, async (req, res) => {
+    await db.ref('config').update(req.body);
+    res.json({ message: "OK" });
 });
 
 app.listen(PORT, '0.0.0.0', () => console.log(`🚀 v1.9.6 SUPREME ACTIVE.`));
