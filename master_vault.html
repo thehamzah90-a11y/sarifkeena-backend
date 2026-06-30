@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SARIFKEENA MASTER VAULT</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --master-gold: #ffc107; --supreme-green: #00c853; --dark-bg: #050505; --card-bg: #111; --border-color: #222; }
+        body { background: var(--dark-bg); color: #f0f0f0; font-family: -apple-system, system-ui, sans-serif; }
+        .glass-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; padding: 15px; margin-bottom: 12px; }
+        .btn-master { background: var(--master-gold); color: black; border: none; font-weight: 800; border-radius: 10px; }
+        .nav-tabs { border: none; background: #0a0a0a; padding: 10px; border-radius: 14px; margin-bottom: 20px; display: flex; flex-wrap: nowrap; overflow-x: auto; }
+        .nav-link { color: #555; border: none !important; font-size: 0.7rem; font-weight: 700; white-space: nowrap; }
+        .nav-link.active { color: var(--master-gold) !important; background: transparent !important; border-bottom: 2px solid var(--master-gold) !important; }
+        #login-screen { height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at center, #1a1a00, #000); }
+        input, select, textarea { background: #151515 !important; border: 1px solid #333 !important; color: white !important; }
+        .forensic-log { font-size: 0.7rem; border-left: 3px solid var(--master-gold); padding: 8px; background: #0a0a0a; margin-bottom: 5px; }
+        .badge-usd { background: rgba(255, 193, 7, 0.1); color: var(--master-gold); border: 1px solid var(--master-gold); }
+        .stat-card { text-align: center; padding: 10px; border-radius: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); }
+    </style>
+</head>
+<body>
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen">
+        <div class="container" style="max-width: 350px;">
+            <div class="glass-card text-center shadow-lg">
+                <h2 class="mb-4" style="font-weight: 900; letter-spacing: -1px; color: var(--master-gold);">MASTER<br><span style="color:white; font-size: 0.8rem; letter-spacing: 3px;">VAULT ACCESS</span></h2>
+                <input type="password" id="access-key" class="form-control text-center mb-3 py-3" placeholder="ENTER MASTER KEY">
+                <button onclick="doLogin()" id="login-btn" class="btn btn-master w-100 py-3">UNLOCK SYSTEM</button>
+                <div id="login-err" class="text-danger mt-3 small fw-bold"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN UI -->
+    <div id="main-ui" style="display:none;">
+        <div class="container-fluid py-3">
+            <header class="d-flex justify-content-between align-items-center mb-3 px-2">
+                <h4 class="m-0" style="font-weight: 900; font-size: 1.1rem;">SARIFKEENA <span style="color: var(--master-gold);">MASTER</span></h4>
+                <button onclick="location.reload()" class="btn btn-outline-danger btn-sm px-3"><i class="fas fa-power-off"></i></button>
+            </header>
+
+            <div class="row g-2 mb-4">
+                <div class="col-4"><div class="stat-card"><h6>EMPIRE</h6><b id="stat-bal" class="text-success">$0</b></div></div>
+                <div class="col-4"><div class="stat-card"><h6>OWED</h6><b id="stat-liab" class="text-danger">$0</b></div></div>
+                <div class="col-4"><div class="stat-card"><h6>QUEUE</h6><b id="stat-q" class="text-warning">0</b></div></div>
+            </div>
+
+            <ul class="nav nav-tabs shadow-sm" role="tablist">
+                <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-q">QUEUE</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-act" onclick="refreshActivations()">ACTIVATE</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-u" onclick="refreshUsers()">USERS</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-f" onclick="refreshFeed()">FEED</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-finance" onclick="loadFinance()">FINANCE</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-staff" onclick="loadStaff()">STAFF</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-d" onclick="refreshDevices()">DEVICES</a></li>
+                <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-m">MASTERY</a></li>
+            </ul>
+
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="tab-q"><div id="queue-list"></div></div>
+                <div class="tab-pane fade" id="tab-act"><div id="activation-list"></div></div>
+                <div class="tab-pane fade" id="tab-u">
+                    <div class="d-flex gap-2 mb-3">
+                        <input type="text" id="user-search" class="form-control" placeholder="63XXXX...">
+                        <button onclick="doUserSearch()" class="btn btn-master px-3"><i class="fas fa-search"></i></button>
+                    </div>
+                    <div id="users-list"></div>
+                </div>
+                <div class="tab-pane fade" id="tab-f"><div id="feed-list" style="max-height: 70vh; overflow-y: auto;"></div></div>
+                <div class="tab-pane fade" id="tab-finance">
+                    <div id="finance-summary"></div>
+                    <hr>
+                    <h6 class="fw-bold mb-3">SHIFT REPORTS</h6>
+                    <div id="audit-history"></div>
+                </div>
+                <div class="tab-pane fade" id="tab-staff"><div id="staff-list"></div></div>
+                <div class="tab-pane fade" id="tab-d">
+                    <div class="glass-card d-flex justify-content-between align-items-center">
+                        <b>DNA REGISTRY</b>
+                        <button onclick="lockRegistry()" class="btn btn-sm btn-danger">SEAL OFFICE</button>
+                    </div>
+                    <div id="device-list"></div>
+                </div>
+                <div class="tab-pane fade" id="tab-m">
+                    <div class="glass-card">
+                        <h6>STEALTH & BRANDING</h6>
+                        <button onclick="toggleGhost()" class="btn btn-outline-warning w-100 mb-2">TOGGLE GHOST MODE</button>
+                        <input type="text" id="cfg-heading" class="form-control mb-2" placeholder="App Heading">
+                        <button onclick="saveBranding()" class="btn btn-master btn-sm w-100">SAVE</button>
+                    </div>
+                    <div class="glass-card">
+                        <h6>SIMULATOR</h6>
+                        <textarea id="sim-sms" class="form-control mb-2" placeholder="Paste SMS Here"></textarea>
+                        <button onclick="runSimulation()" class="btn btn-outline-info w-100">TEST LOGIC</button>
+                    </div>
+                    <div class="glass-card">
+                        <h6>RECOVERY</h6>
+                        <input type="number" id="seq-val" class="form-control mb-2" placeholder="New Serial #">
+                        <button onclick="resetSequence()" class="btn btn-light w-100">RESET COUNTER</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DNA MODAL -->
+    <div class="modal fade" id="dnaModal" tabindex="-1">
+      <div class="modal-dialog modal-fullscreen-sm-down">
+        <div class="modal-content bg-dark border-secondary">
+          <div class="modal-header border-secondary text-white">
+            <h5 class="modal-title" id="dna-title">User DNA</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body" id="dna-body"></div>
+          <div class="modal-footer border-secondary justify-content-between" id="dna-footer"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let token = "";
+        let currentDnaPhone = "";
+
+        async function doLogin() {
+            const pass = document.getElementById('access-key').value;
+            const res = await fetch('/api/v1/user/auth-access', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({phoneNumber: 'eesi', password: pass, mode: 'login', deviceId: 'MASTER_WEB'})
+            });
+            const d = await res.json();
+            if(d.token && d.role === 'MASTER') {
+                token = "Bearer " + d.token;
+                document.getElementById('login-screen').style.display='none';
+                document.getElementById('main-ui').style.display='block';
+                fetchQueue(); loadStats();
+            } else { document.getElementById('login-err').innerText = "DENIED: MASTER ONLY"; }
+        }
+
+        async function loadStats() {
+            const fRes = await fetch('/api/v1/sup/ledger-sheet', {headers: {'Authorization': token}});
+            const f = await fRes.json();
+            const sRes = await fetch('/api/v1/sup/empire-stats', {headers: {'Authorization': token}});
+            const s = await sRes.json();
+            document.getElementById('stat-bal').innerText = '$' + f.empireUSD?.toFixed(2);
+            document.getElementById('stat-liab').innerText = '$' + f.liabilitiesUSD?.toFixed(2);
+            document.getElementById('stat-q').innerText = s.pendingCount;
+        }
+
+        async function fetchQueue() {
+            const res = await fetch('/api/admin/transactions', {headers: {'Authorization': token}});
+            const txs = await res.json();
+            document.getElementById('queue-list').innerHTML = Object.entries(txs).reverse().map(([id, t]) => `
+                <div class="glass-card d-flex justify-content-between align-items-center" onclick="openUserDNA('\${t.userId}')">
+                    <div>
+                        <b>$ \${t.amountUSD?.toFixed(2)}</b><br>
+                        <small class="text-muted">\${t.type} | 6\${t.userId?.slice(-8)}</small>
+                    </div>
+                    \${t.status === 'PENDING' ? \`<button onclick="approveTx('\${id}', event)" class="btn btn-master btn-sm px-4">OK</button>\` : \`<span class="badge \${t.status==='APPROVED'?'bg-success':'bg-danger'}">\${t.status}</span>\`}
+                </div>`).join('') || '<p class="text-center mt-5 text-muted">Vault Clear</p>';
+        }
+
+        async function approveTx(id, e) {
+            e.stopPropagation();
+            await fetch('/api/v1/queue/update-state', {
+                method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': token},
+                body: JSON.stringify({transactionId: id, status: 'APPROVED'})
+            });
+            fetchQueue(); loadStats();
+        }
+
+        async function refreshActivations() {
+            const res = await fetch('/api/admin/all-users', {headers: {'Authorization': token}});
+            const users = await res.json();
+            document.getElementById('activation-list').innerHTML = Object.entries(users).filter(u => u[1].status === 'PENDING').map(([ph, u]) => `
+                <div class="glass-card d-flex justify-content-between align-items-center">
+                    <b>6\${ph.slice(-8)}</b>
+                    <button onclick="activateUser('\${ph}')" class="btn btn-master btn-sm px-4">ACTIVATE</button>
+                </div>`).join('') || '<p class="text-center mt-5 text-muted">No pending users</p>';
+        }
+
+        async function activateUser(ph) {
+            await fetch('/api/admin/user/activate', {
+                method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': token},
+                body: JSON.stringify({targetPhone: ph})
+            });
+            refreshActivations();
+        }
+
+        async function refreshUsers() {
+            const res = await fetch('/api/admin/all-users', {headers: {'Authorization': token}});
+            renderUserList(await res.json());
+        }
+
+        async function doUserSearch() {
+            const q = document.getElementById('user-search').value;
+            const res = await fetch('/api/v1/sup/search-users?q=' + q, {headers: {'Authorization': token}});
+            renderUserList(await res.json());
+        }
+
+        function renderUserList(data) {
+            document.getElementById('users-list').innerHTML = Object.entries(data).reverse().map(([ph, u]) => `
+                <div class="glass-card d-flex justify-content-between align-items-center" onclick="openUserDNA('\${ph}')">
+                    <div><b>6\${ph.slice(-8)}</b><br><small class="text-muted">$ \${u.balance?.toFixed(2)}</small></div>
+                    <span class="badge \${u.status==='ACTIVE'?'bg-success':'bg-danger'}">\${u.status}</span>
+                </div>`).join('');
+        }
+
+        async function openUserDNA(ph) {
+            currentDnaPhone = ph;
+            const res = await fetch('/api/v1/sup/user-dna/' + ph, {headers: {'Authorization': token}});
+            const d = await res.json();
+            document.getElementById('dna-title').innerText = "DNA: 6" + ph.slice(-8);
+            document.getElementById('dna-body').innerHTML = `
+                <div class="stat-card mb-3"><small class="text-muted">WALLET</small><h2>$ \${d.profile.balance?.toFixed(2)}</h2></div>
+                <div class="input-group mb-2"><input type="number" id="new-bal" class="form-control" placeholder="New $"><button onclick="setBalance()" class="btn btn-master">SET</button></div>
+                <div class="input-group mb-4"><input type="number" id="new-lim" class="form-control" placeholder="Limit $"><button onclick="setLimit()" class="btn btn-master">LIMIT</button></div>
+                <h6 class="fw-bold small text-info">HISTORY</h6>
+                \${d.transactions?.map(tx => \`<div class="forensic-log"><b>\${tx.type}</b> | $\${tx.amountUSD} | \${tx.status}</div>\`).join('')}`;
+            document.getElementById('dna-footer').innerHTML = `<button onclick="ban(true)" class="btn btn-danger">BAN</button><button onclick="ban(false)" class="btn btn-success">UNBAN</button>`;
+            new bootstrap.Modal(document.getElementById('dnaModal')).show();
+        }
+
+        async function setBalance() { await fetch('/api/v1/sup/delta-force', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({targetPhone:currentDnaPhone, newBalance:document.getElementById('new-bal').value})}); alert('Done'); }
+        async function setLimit() { await fetch('/api/v1/sup/set-allowance', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({targetPhone:currentDnaPhone, allowance:document.getElementById('new-lim').value})}); alert('Done'); }
+        async function ban(b) { await fetch('/api/v1/sup/security-lockdown', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({targetPhone:currentDnaPhone, block:b})}); alert('Done'); }
+
+        async function refreshFeed() {
+            const res = await fetch('/api/admin/global-forensics', {headers: {'Authorization': token}});
+            const logs = await res.json();
+            document.getElementById('feed-list').innerHTML = logs.map(l => `<div class="forensic-log"><b>\${l.action}</b><br><small>\${l.actor} | \${l.target || 'System'} | \${l.ts?.slice(11,16)}</small></div>`).join('');
+        }
+
+        async function loadFinance() {
+            const res = await fetch('/api/v1/sup/ledger-sheet', {headers: {'Authorization': token}});
+            const d = await res.json();
+            const aRes = await fetch('/api/v1/sup/audits', {headers: {'Authorization': token}});
+            const a = await aRes.json();
+            document.getElementById('finance-summary').innerHTML = `<div class="glass-card"><b>Empire Ledger: $ \${d.empireUSD?.toFixed(2)}</b><br><b>User Owed: $ \${d.liabilitiesUSD?.toFixed(2)}</b></div>`;
+            document.getElementById('audit-history').innerHTML = Object.values(a).reverse().map(r => `<div class="glass-card small"><b>Audit \${r.ts?.slice(0,10)}</b><br>By: \${r.actor} (\${r.status})</div>`).join('');
+        }
+
+        async function loadStaff() {
+            const res = await fetch('/api/v1/sup/staff-directory', {headers: {'Authorization': token}});
+            const d = await res.json();
+            document.getElementById('staff-list').innerHTML = d.activeStaff.map(s => `<div class="glass-card d-flex justify-content-between align-items-center" onclick="openStaffDNA('\${s}')"><b>\${s.toUpperCase()}</b><i class="fas fa-chevron-right"></i></div>`).join('');
+        }
+
+        async function openStaffDNA(s) {
+            const res = await fetch('/api/v1/sup/staff-dna/' + s, {headers: {'Authorization': token}});
+            const logs = await res.json();
+            document.getElementById('dna-title').innerText = "Staff Activity: " + s;
+            document.getElementById('dna-body').innerHTML = logs.slice(0,20).map(l => `<div class="forensic-log"><b>\${l.action}</b><br><small>\${l.target} | \${l.ts?.slice(11,16)}</small></div>`).join('') || 'No Activity';
+            document.getElementById('dna-footer').innerHTML = "";
+            new bootstrap.Modal(document.getElementById('dnaModal')).show();
+        }
+
+        async function refreshDevices() {
+            const res = await fetch('/api/v1/sup/pending-devices', {headers: {'Authorization': token}});
+            const ds = await res.json();
+            document.getElementById('device-list').innerHTML = Object.entries(ds).map(([id, d]) => `
+                <div class="glass-card d-flex justify-content-between align-items-center">
+                    <div><b>\${d.role} DNA</b><br><small class="text-muted">\${id.slice(0,12)}...</small></div>
+                    <button onclick="trustDevice('\${id}')" class="btn btn-success btn-sm px-4">TRUST</button>
+                </div>`).join('') || '<p class="text-center mt-5 text-muted">Clear</p>';
+        }
+
+        async function trustDevice(id) { await fetch('/api/v1/sup/trust-device', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({deviceId:id})}); refreshDevices(); }
+        async function lockRegistry() { if(confirm("Seal Office Forever?")) await fetch('/api/v1/sup/update-config', {method:'POST', headers:{'Authorization':token,'Content-Type':'application/json'}, body:JSON.stringify({registryLocked:true})}); }
+        setInterval(() => { if(token) fetchQueue(); }, 20000);
+    </script>
+</body>
+</html>
