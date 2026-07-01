@@ -130,13 +130,13 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
         const user = (await userRef.once('value')).val();
         if (mode === 'register') {
             if (user) return res.status(400).json({ message: "Exists" });
-            await userRef.set({ '062_phoneNumber': clean, '063_password': password, '064_balanceUSD': 0.0, '065_status': 'PENDING', '067_createdAt': new Date().toISOString() });
+            await userRef.set({ '062_phoneNumber': clean, '063_password': password, '064_balanceUSD': 0.0, '065_status': 'PENDING', '067_createdAt': new Date().toISOString(), '075_isReviewer': false });
             return res.json({ message: "PENDING" });
         } else {
             if (!user || user['063_password'] !== password) return res.status(401).send("Fail");
             if (user['065_status'] === 'BLOCKED') return res.status(403).send("Blocked");
             await stampDNA(clean, deviceId);
-            return res.json({ token: jwt.sign({ phoneNumber: clean, role: 'USER', deviceId }, SECRET_KEY, { expiresIn: '30d' }), role: 'USER' });
+            return res.json({ token: jwt.sign({ phoneNumber: clean, role: 'USER', deviceId }, SECRET_KEY, { expiresIn: '30d' }), role: 'USER', '075_isReviewer': user['075_isReviewer'] || false });
         }
     } catch (e) { res.status(500).send("Err"); }
 });
@@ -156,28 +156,61 @@ app.post('/api/v1/queue/update-state', authenticate, isSupport, async (req, res)
         await txRef.update({ '080_status': 'APPROVED', '087_approvedBy': req.user.phoneNumber, '082_prevBalance': oldBal, '083_newBalance': nBal, '081_imperialRef': iRef, '095_creation_ts': new Date().toISOString(), '088_dnaStamp': req.user.deviceId || "WEB" });
         await updateVerifiedLedger(txData['078_amountUSD'], isOut ? 'SUB' : 'ADD');
         await db.ref(PATH.FORENSICS + '/104_staff_dossiers/' + req.user.phoneNumber).transaction((s) => { if(s) s.total_approvals = (s.total_approvals || 0) + 1; return s; });
+
+        // BUILD_003: Migrate ID to Approved Folder if this was a manual release of a flagged ID
+        if (txData['086_externalId']) {
+            await migrateId(txData['086_externalId'], 'approved');
+        }
     }
     res.json({ message: "OK" });
 });
 
+// --- HELPER FOR BUILD_003: ID MIGRATION ENGINE ---
+const checkDuplicateId = async (refId) => {
+    if (!db || !refId) return false;
+    const folders = ['approved', 'holding', 'manual_needed'];
+    for (const f of folders) {
+        const snap = await db.ref('used_receipt_ids/' + f + '/' + refId).once('value');
+        if (snap.val()) return true;
+    }
+    return false;
+};
+
+const migrateId = async (refId, target) => {
+    if (!db || !refId) return;
+    const folders = ['holding', 'manual_needed'];
+    for (const f of folders) {
+        await db.ref('used_receipt_ids/' + f + '/' + refId).remove();
+    }
+    await db.ref('used_receipt_ids/approved/' + refId).set({ ts: new Date().toISOString(), status: 'FINALIZED' });
+};
+
 app.post('/api/v1/gateway/pulse', async (req, res) => {
     if (!db) return res.status(503).send("Offline");
     const { p_v1, p_v2, reportedBalanceSLSH, direction, refId } = req.body;
+
+    // BUILD_003: Wall 1 - Double Spend Protection
+    if (await checkDuplicateId(refId)) return res.status(400).send("Duplicate ID");
+
     try {
         const amtSLSH = parseInt(p_v1); const amtUSD = amtSLSH / 11000; const ph = normalizePhone(p_v2);
         const baseline = (await db.ref(PATH.VERIFY + '/023_lastKnownBaselineBalanceSLSH').once('value')).val() || 0;
         const expected = direction === 'OUT' ? baseline - amtSLSH : baseline + amtSLSH;
 
-        // --- BATCH SYNC LOGIC (NETWORK WAIT 3 PEOPLE) ---
+        // --- BATCH SYNC LOGIC ---
         if (Math.abs(expected - reportedBalanceSLSH) > 100) {
             const bufferRef = db.ref(PATH.SYNC + '/108_pulse_buffer');
             await bufferRef.push().set({ ts: new Date().toISOString(), ph, amtSLSH, refId, reportedBalanceSLSH });
+
+            // BUILD_003: Move to Holding Folder
+            await db.ref('used_receipt_ids/holding/' + refId).set({ ts: new Date().toISOString(), ph, amtSLSH });
+
             const count = (await bufferRef.once('value')).numChildren();
             if (count >= 3) {
-                // AUTO RELEASE BATCH
-                await db.ref(PATH.VERIFY).update({ '023_lastKnownBaselineBalanceSLSH': reportedBalanceSLSH, '028_autoReleaseMode': 'INSTANT_RESET' });
+                await db.ref(PATH.VERIFY).update({ '023_lastKnownBaselineBaselineBalanceSLSH': reportedBalanceSLSH, '028_autoReleaseMode': 'INSTANT_RESET' });
                 await bufferRef.remove();
                 await logForensic({ user: { phoneNumber: 'SYSTEM' } }, "BATCH_RELEASED", "ALL", { count });
+                // IDs will be migrated on delivery loop
             }
             return res.json({ message: "BUFFERED" });
         }
@@ -193,6 +226,12 @@ app.post('/api/v1/gateway/pulse', async (req, res) => {
                 await uRef.update({ '064_balanceUSD': n });
                 await db.ref(PATH.TX + '/' + tid).update({ '080_status': 'APPROVED', '086_externalId': refId, '082_prevBalance': old, '083_newBalance': n, '081_imperialRef': i, '090_result_snapshot': reportedBalanceSLSH });
                 await updateVerifiedLedger(amtUSD, 'ADD');
+
+                // BUILD_003: Final Approval Migration
+                await migrateId(refId, 'approved');
+            } else {
+                // BUILD_003: Wall 3 - No Match Room (Manual Needed)
+                await db.ref('used_receipt_ids/manual_needed/' + refId).set({ ts: new Date().toISOString(), ph, amtSLSH, note: "No matching pending request" });
             }
         }
         res.json({ message: "OK" });
@@ -212,6 +251,22 @@ app.post('/api/v1/sup/audit-lock', authenticate, isSupport, async (req, res) => 
 });
 
 // --- REST OF APIs (ALL CONNECTED) ---
+app.get('/api/v1/sup/meta-gate', async (req, res) => {
+    if (!db) return res.json({ category: { banks: [] } });
+    const snap = await db.ref(PATH.GATEWAY).once('value');
+    const gateways = snap.val() || {};
+    const bankList = Object.entries(gateways).map(([id, g]) => ({
+        id,
+        name: g['032_name'],
+        icon: g['038_iconUrl'],
+        color: g['039_brandColor'],
+        ussd: g['033_ussd'],
+        targetNumber: g['034_targetNumber'],
+        mathLabel: g['035_mathLabel'],
+        status: g['036_gatewayStatus']
+    }));
+    res.json({ category: { title: "DHIG / KALA BAX", banks: bankList } });
+});
 app.get('/api/config', async (req, res) => res.json(db ? (await db.ref('config').once('value')).val() : {}));
 app.post('/api/v1/sup/update-config', authenticate, isMaster, async (req, res) => { if (db) await db.ref('config').update(req.body); res.json({ message: "OK" }); });
 app.get('/api/balance', authenticate, async (req, res) => { const u = db ? (await db.ref(PATH.USERS + '/' + req.user.phoneNumber).once('value')).val() : null; res.json({ balanceUSD: u ? u['064_balanceUSD'] : 0 }); });
@@ -222,8 +277,36 @@ app.get('/api/transactions', authenticate, async (req, res) => {
 });
 app.post('/api/v1/user/action-post', authenticate, async (req, res) => {
     if (!db) return res.status(503).send("Offline");
-    const { type, amountSLSH } = req.body;
-    await db.ref(PATH.TX).push().set({ '076_userId': req.user.phoneNumber, '077_type': type, '079_amountSLSH': amountSLSH, '078_amountUSD': amountSLSH / 11000, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString() });
+    const { type, amountSLSH, amountUSD, externalId } = req.body;
+    const ph = req.user.phoneNumber;
+
+    // Line 7 Logic: ZAAD_WITHDRAW (Subtracts from Balance)
+    if (type === 'ZAAD_WITHDRAW') {
+        const uRef = db.ref(PATH.USERS + '/' + ph);
+        const uData = (await uRef.once('value')).val();
+        const bal = parseFloat(uData['064_balanceUSD'] || 0);
+        const reqUSD = parseFloat(amountUSD);
+
+        if (bal < reqUSD) return res.status(400).send("Insufficient Balance");
+
+        await uRef.update({ '064_balanceUSD': bal - reqUSD });
+        await db.ref(PATH.TX).push().set({
+            '076_userId': ph, '077_type': type, '079_amountSLSH': reqUSD * 10000, '078_amountUSD': reqUSD,
+            '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '082_prevBalance': bal, '083_newBalance': bal - reqUSD
+        });
+        return res.json({ message: "SUCCESS" });
+    }
+
+    // Line 6 Logic: 1XBET_WITHDRAW (Adds to balance on approval)
+    if (type === '1XBET_WITHDRAW') {
+        await db.ref(PATH.TX).push().set({
+            '076_userId': ph, '077_type': type, '086_externalId': externalId, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString()
+        });
+        return res.json({ message: "SUCCESS" });
+    }
+
+    // Default Logic for Other Deposits/Withdrawals
+    await db.ref(PATH.TX).push().set({ '076_userId': ph, '077_type': type, '079_amountSLSH': amountSLSH, '078_amountUSD': amountSLSH / 11000, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString() });
     res.json({ message: "SUCCESS" });
 });
 app.get('/api/admin/all-users', authenticate, isSupport, async (req, res) => res.json(db ? (await db.ref(PATH.USERS).once('value')).val() || {} : {}));
@@ -261,7 +344,16 @@ app.get('/api/v1/sup/user-dna/:phone', authenticate, isSupport, async (req, res)
     res.json({ profile, transactions: txs.reverse() });
 });
 app.post('/api/v1/sup/set-allowance', authenticate, isSupport, async (req, res) => { if (db) await db.ref(PATH.USERS + '/' + normalizePhone(req.body.targetPhone)).update({ '066_dailyLimitUSD': parseFloat(req.body.allowance) }); res.json({ message: "OK" }); });
-app.post('/api/v1/sup/security-lockdown', authenticate, isSupport, async (req, res) => { if (db) await db.ref(PATH.USERS + '/' + normalizePhone(req.body.targetPhone)).update({ '065_status': req.body.block ? 'BLOCKED' : 'ACTIVE' }); res.json({ message: "OK" }); });
+app.post('/api/v1/sup/security-lockdown', authenticate, isSupport, async (req, res) => {
+    if (db) {
+        const ph = normalizePhone(req.body.targetPhone);
+        const updates = {};
+        if (req.body.block !== undefined) updates['065_status'] = req.body.block ? 'BLOCKED' : 'ACTIVE';
+        if (req.body.reviewer !== undefined) updates['075_isReviewer'] = req.body.reviewer;
+        await db.ref(PATH.USERS + '/' + ph).update(updates);
+    }
+    res.json({ message: "OK" });
+});
 app.get('/api/v1/sup/staff-directory', authenticate, isMaster, async (req, res) => { res.json({ activeStaff: db ? Object.keys((await db.ref(PATH.FORENSICS + '/104_staff_dossiers').once('value')).val() || {}) : [] }); });
 app.get('/api/v1/sup/staff-dna/:phone', authenticate, isMaster, async (req, res) => { if (!db) return res.json([]); const snap = await db.ref(PATH.FORENSICS + '/104_staff_dossiers/' + req.params.phone + '/actions').limitToLast(100).once('value'); res.json(Object.values(snap.val() || {}).reverse()); });
 app.get('/api/v1/sup/pending-devices', authenticate, isMaster, async (req, res) => { res.json(db ? (await db.ref(PATH.DNA + '/059_pending_approval_devices').once('value')).val() || {} : {}); });
