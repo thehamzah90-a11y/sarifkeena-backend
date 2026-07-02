@@ -76,11 +76,13 @@ const updateVerifiedLedger = async (amountUSD, type = 'ADD') => {
 const stampDNA = async (phoneNumber, deviceId) => {
     if (!db || !deviceId) return;
     const ts = new Date().toISOString();
+    // Path: users/{phone}/071_identity_dna_stamps/{deviceId}
     await db.ref(PATH.USERS + '/' + phoneNumber + '/071_identity_dna_stamps/' + deviceId).set({ ts, seen: true });
+    // Node: 072_current_dna
     await db.ref(PATH.USERS + '/' + phoneNumber).update({ '072_current_dna': deviceId });
 };
 
-// --- AUTH MIDDLEWARE (RECONCILED FOR ADMIN) ---
+// --- AUTH MIDDLEWARE ---
 const authenticate = async (req, res, next) => {
     try {
         const authHeader = req.headers['authorization'];
@@ -94,8 +96,8 @@ const authenticate = async (req, res, next) => {
                 if (db) {
                     const trusted = (await db.ref(PATH.DNA + '/058_trusted_devices').once('value')).val() || {};
                     if (Object.keys(trusted).length > 0 && !trusted[user.deviceId]) {
-                        // Allow if first DNA or trusted
-                        console.log("Device Check:", user.deviceId);
+                        // Allow logic for Admin Device Lock
+                        console.log("Admin Device Validation:", user.deviceId);
                     }
                 }
             }
@@ -121,6 +123,15 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
         const { phoneNumber, password, mode, deviceId } = req.body;
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+        // BUILD_004.3: Staff Registry Gate (Node 059)
+        if (db && deviceId && ['eesi','maamulka','maamulka_2'].includes(phoneNumber)) {
+             await db.ref(PATH.DNA + '/059_pending_approval_devices/' + deviceId).set({
+                role: phoneNumber,
+                ip: clientIp,
+                ts: new Date().toISOString()
+             });
+        }
+
         if (phoneNumber === 'eesi' && password === MASTER_PASS) {
             return res.json({ token: jwt.sign({ phoneNumber: 'eesi', role: 'MASTER', ip: clientIp, deviceId }, SECRET_KEY, { expiresIn: '24h' }), role: 'MASTER' });
         }
@@ -142,7 +153,10 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
         } else {
             if (!user || user['063_password'] !== password) return res.status(401).json({ message: "Fail" });
             if (user['065_status'] === 'BLOCKED') return res.status(403).json({ message: "Blocked" });
+
+            // BUILD_004.3: Hardware DNA Stamping (Node 071/072)
             await stampDNA(clean, deviceId);
+
             return res.json({
                 token: jwt.sign({ phoneNumber: clean, role: 'USER', deviceId }, SECRET_KEY, { expiresIn: '30d' }),
                 role: 'USER',
@@ -172,14 +186,15 @@ app.post('/api/v1/user/action-post', authenticate, async (req, res) => {
             await uRef.update({ '064_balanceUSD': bal - amountUSD });
             await db.ref(PATH.TX).push().set({
                 '076_userId': ph, '077_type': type, '079_amountSLSH': amountUSD * 10000, '078_amountUSD': amountUSD,
-                '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '082_prevBalance': bal, '083_newBalance': bal - amountUSD
+                '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '082_prevBalance': bal, '083_newBalance': bal - amountUSD,
+                '088_dnaStamp': req.user.deviceId || "WEB"
             });
             return res.json({ message: "SUCCESS" });
         }
 
         if (type === '1XBET_WITHDRAW') {
             await db.ref(PATH.TX).push().set({
-                '076_userId': ph, '077_type': type, '086_externalId': externalId, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString()
+                '076_userId': ph, '077_type': type, '086_externalId': externalId, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '088_dnaStamp': req.user.deviceId || "WEB"
             });
             return res.json({ message: "SUCCESS" });
         }
@@ -187,13 +202,13 @@ app.post('/api/v1/user/action-post', authenticate, async (req, res) => {
         const finalUSD = amountUSD || (amountSLSH / 11000);
         await db.ref(PATH.TX).push().set({
             '076_userId': ph, '077_type': type, '079_amountSLSH': amountSLSH, '078_amountUSD': finalUSD,
-            '080_status': 'PENDING', '095_creation_ts': new Date().toISOString()
+            '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '088_dnaStamp': req.user.deviceId || "WEB"
         });
         res.json({ message: "SUCCESS" });
     } catch (e) { res.status(500).json({ message: "Server Error", details: e.message }); }
 });
 
-// --- ADMIN APIs (RESTORED CONNECTION) ---
+// --- ADMIN APIs ---
 
 app.get('/api/admin/transactions', authenticate, isSupport, async (req, res) => {
     try {
@@ -221,7 +236,14 @@ app.post('/api/v1/queue/update-state', authenticate, isSupport, async (req, res)
             const nBal = isOut ? oldBal - txData['078_amountUSD'] : oldBal + txData['078_amountUSD'];
             const iRef = await getNextImperialRef();
             await uRef.update({ '064_balanceUSD': nBal });
-            await txRef.update({ '080_status': 'APPROVED', '087_approvedBy': req.user.phoneNumber, '082_prevBalance': oldBal, '083_newBalance': nBal, '081_imperialRef': iRef, '095_approval_ts': new Date().toISOString() });
+            await txRef.update({
+                '080_status': 'APPROVED',
+                '087_approvedBy': req.user.phoneNumber,
+                '082_prevBalance': oldBal,
+                '083_newBalance': nBal,
+                '081_imperialRef': iRef,
+                '095_approval_ts': new Date().toISOString()
+            });
             await updateVerifiedLedger(txData['078_amountUSD'], isOut ? 'SUB' : 'ADD');
         }
         res.json({ message: "OK" });
@@ -271,5 +293,10 @@ app.get('/api/transactions', authenticate, async (req, res) => {
 app.get('/api/config', async (req, res) => res.json(db ? (await db.ref('config').once('value')).val() : {}));
 app.post('/api/v1/sup/update-config', authenticate, isMaster, async (req, res) => { if (db) await db.ref('config').update(req.body); res.json({ message: "OK" }); });
 app.post('/api/admin/user/activate', authenticate, isSupport, async (req, res) => { if (db) await db.ref(PATH.USERS + '/' + req.body.targetPhone).update({ '065_status': 'ACTIVE' }); res.json({ message: "OK" }); });
+
+// BUILD_004.3: Restored DNA & Staff Management endpoints
+app.get('/api/v1/sup/pending-devices', authenticate, isMaster, async (req, res) => { res.json(db ? (await db.ref(PATH.DNA + '/059_pending_approval_devices').once('value')).val() || {} : {}); });
+app.post('/api/v1/sup/trust-device', authenticate, isMaster, async (req, res) => { if (!db) return res.status(503).json({ message: "Offline" }); const snap = await db.ref(PATH.DNA + '/059_pending_approval_devices/' + req.body.deviceId).once('value'); if (snap.val()) { await db.ref(PATH.DNA + '/058_trusted_devices/' + req.body.deviceId).set(snap.val()); await db.ref(PATH.DNA + '/059_pending_approval_devices/' + req.body.deviceId).remove(); res.json({ message: "OK" }); } else res.status(404).json({ message: "Device not found" }); });
+app.get('/api/v1/sup/user-dna/:phone', authenticate, isSupport, async (req, res) => { if (!db) return res.json({}); const ph = normalizePhone(req.params.phone); const profile = (await db.ref(PATH.USERS + '/' + ph).once('value')).val(); const txs = Object.values((await db.ref(PATH.TX).orderByChild('076_userId').equalTo(ph).limitToLast(10).once('value')).val() || {}); res.json({ profile, transactions: txs.reverse() }); });
 
 app.listen(PORT, '0.0.0.0', () => console.log(`🚀 v2.2.1 SUPREME Active.`));
