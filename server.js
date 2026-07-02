@@ -25,7 +25,7 @@ try {
         });
         db = admin.database();
         dbStatus = "🟢 ONLINE";
-        console.log("✅ v2.5.0 SUPREME BRAIN ONLINE.");
+        console.log("✅ v2.5.1 SUPREME BRAIN ONLINE.");
     }
 } catch (error) {
     console.error("❌ DB Error:", error.message);
@@ -80,7 +80,7 @@ const stampDNA = async (phoneNumber, deviceId) => {
     await db.ref(PATH.USERS + '/' + phoneNumber).update({ '072_current_dna': deviceId });
 };
 
-// BUILD 005: New Global Forensic Logger
+// Global Forensic Logger for Admin/Support Actions
 const logEmpireAction = async (req, action, target, details = {}) => {
     if (!db) return;
     try {
@@ -94,7 +94,7 @@ const logEmpireAction = async (req, action, target, details = {}) => {
     } catch (e) {}
 };
 
-// --- AUTH MIDDLEWARE ---
+// --- AUTH MIDDLEWARE (SUPREME JSON HARDENED) ---
 const authenticate = async (req, res, next) => {
     try {
         const authHeader = req.headers['authorization'];
@@ -125,6 +125,7 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
         const { phoneNumber, password, mode, deviceId } = req.body;
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+        // Staff Device Registry (Build 004.3)
         if (db && deviceId && ['eesi','maamulka','maamulka_2'].includes(phoneNumber)) {
              await db.ref(PATH.DNA + '/059_pending_approval_devices/' + deviceId).set({ role: phoneNumber, ip: clientIp, ts: new Date().toISOString() });
         }
@@ -151,7 +152,11 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
             if (!user || user['063_password'] !== password) return res.status(401).json({ message: "Fail" });
             if (user['065_status'] === 'BLOCKED') return res.status(403).json({ message: "Blocked" });
             await stampDNA(clean, deviceId);
-            return res.json({ token: jwt.sign({ phoneNumber: clean, role: 'USER', deviceId }, SECRET_KEY, { expiresIn: '30d' }), role: 'USER', '132_isReviewer': user['132_isReviewer'] || false });
+            return res.json({
+                token: jwt.sign({ phoneNumber: clean, role: 'USER', deviceId }, SECRET_KEY, { expiresIn: '30d' }),
+                role: 'USER',
+                '132_isReviewer': user['132_isReviewer'] || false
+            });
         }
     } catch (e) { res.status(500).json({ message: "Auth Error" }); }
 });
@@ -159,9 +164,12 @@ app.post('/api/v1/user/auth-access', async (req, res) => {
 app.post('/api/v1/user/action-post', authenticate, async (req, res) => {
     try {
         if (!db) return res.status(503).json({ message: "Offline" });
+
+        // BUILD 004: Universal Key Support
         const type = req.body['077_type'] || req.body.type;
         const amountSLSH = parseInt(req.body['079_amountSLSH'] || req.body.amountSLSH) || 0;
         const amountUSD = parseFloat(req.body['078_amountUSD'] || req.body.amountUSD) || 0;
+        const externalId = req.body['086_externalId'] || req.body.externalId || "";
         const ph = req.user.phoneNumber;
 
         if (type.includes('ZAAD_WITHDRAW')) {
@@ -170,36 +178,49 @@ app.post('/api/v1/user/action-post', authenticate, async (req, res) => {
             const bal = parseFloat(uData['064_balanceUSD'] || 0);
             if (bal < amountUSD) return res.status(400).json({ message: "Insufficient Balance" });
             await uRef.update({ '064_balanceUSD': bal - amountUSD });
-            await db.ref(PATH.TX).push().set({ '076_userId': ph, '077_type': type, '079_amountSLSH': amountUSD * 10000, '078_amountUSD': amountUSD, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '082_prevBalance': bal, '083_newBalance': bal - amountUSD, '088_dnaStamp': req.user.deviceId });
+            await db.ref(PATH.TX).push().set({
+                '076_userId': ph, '077_type': type, '079_amountSLSH': amountUSD * 10000, '078_amountUSD': amountUSD,
+                '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '082_prevBalance': bal, '083_newBalance': bal - amountUSD,
+                '088_dnaStamp': req.user.deviceId
+            });
             return res.json({ message: "SUCCESS" });
         }
 
         const finalUSD = amountUSD || (amountSLSH / 11000);
-        await db.ref(PATH.TX).push().set({ '076_userId': ph, '077_type': type, '079_amountSLSH': amountSLSH, '078_amountUSD': finalUSD, '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '088_dnaStamp': req.user.deviceId });
+        await db.ref(PATH.TX).push().set({
+            '076_userId': ph, '077_type': type, '079_amountSLSH': amountSLSH, '078_amountUSD': finalUSD,
+            '080_status': 'PENDING', '095_creation_ts': new Date().toISOString(), '088_dnaStamp': req.user.deviceId
+        });
         res.json({ message: "SUCCESS" });
     } catch (e) { res.status(500).json({ message: "Server Error" }); }
 });
 
 // --- SUPREME ADMIN APIs (BUILD 005 - 132 NODE EXPANSION) ---
 
-// 1. Advanced User Search (Search by Phone or Balance Range)
-app.get('/api/admin/user/deep-search', authenticate, isSupport, async (req, res) => {
+app.get('/api/admin/transactions', authenticate, isSupport, async (req, res) => { const snap = await db.ref(PATH.TX).limitToLast(100).once('value'); res.json(snap.val() || {}); });
+app.get('/api/admin/all-users', authenticate, isSupport, async (req, res) => { const snap = await db.ref(PATH.USERS).once('value'); res.json(snap.val() || {}); });
+
+app.post('/api/admin/user/activate', authenticate, isSupport, async (req, res) => {
     try {
-        const { q, minBal, maxBal } = req.query;
-        let snap = await db.ref(PATH.USERS).once('value');
-        let users = snap.val() || {};
-        let results = Object.entries(users).filter(([ph, u]) => {
-            let match = true;
-            if (q) match = ph.includes(q);
-            if (minBal) match = match && parseFloat(u['064_balanceUSD']) >= parseFloat(minBal);
-            if (maxBal) match = match && parseFloat(u['064_balanceUSD']) <= parseFloat(maxBal);
-            return match;
-        });
-        res.json(Object.fromEntries(results));
-    } catch (e) { res.status(500).send("Search Error"); }
+        const ph = normalizePhone(req.body.targetPhone);
+        await db.ref(PATH.USERS + '/' + ph).update({ '065_status': 'ACTIVE' });
+        await logEmpireAction(req, "USER_ACTIVATED", ph);
+        res.json({ message: "OK" });
+    } catch (e) { res.status(500).send("Error"); }
 });
 
-// 2. Manual Balance Correction (Node 064) with Auto-Forensic
+app.post('/api/v1/sup/security-lockdown', authenticate, isSupport, async (req, res) => {
+    try {
+        const ph = normalizePhone(req.body.targetPhone);
+        const updates = {};
+        if (req.body.block !== undefined) updates['065_status'] = req.body.block ? 'BLOCKED' : 'ACTIVE';
+        if (req.body.reviewer !== undefined) updates['132_isReviewer'] = req.body.reviewer;
+        await db.ref(PATH.USERS + '/' + ph).update(updates);
+        await logEmpireAction(req, "SECURITY_LOCKDOWN", ph, updates);
+        res.json({ message: "OK" });
+    } catch (e) { res.status(500).send("Lockdown Error"); }
+});
+
 app.post('/api/admin/user/delta-balance', authenticate, isMaster, async (req, res) => {
     try {
         const { targetPhone, deltaUSD, reason } = req.body;
@@ -207,85 +228,14 @@ app.post('/api/admin/user/delta-balance', authenticate, isMaster, async (req, re
         const uRef = db.ref(PATH.USERS + '/' + ph);
         const current = (await uRef.once('value')).val();
         if (!current) return res.status(404).send("User not found");
-
         const oldBal = parseFloat(current['064_balanceUSD']) || 0;
         const newBal = oldBal + parseFloat(deltaUSD);
         await uRef.update({ '064_balanceUSD': newBal });
-
         await logEmpireAction(req, "BALANCE_CORRECTION", ph, { oldBal, newBal, deltaUSD, reason });
         res.json({ message: "OK", newBalance: newBal });
-    } catch (e) { res.status(500).send("Correction Error"); }
+    } catch (e) { res.status(500).send("Error"); }
 });
 
-// 3. Security Lockdown (Toggle Account Status & Reviewer Flag)
-app.post('/api/admin/user/security-lock', authenticate, isSupport, async (req, res) => {
-    try {
-        const { targetPhone, status, isReviewer } = req.body;
-        const ph = normalizePhone(targetPhone);
-        const updates = {};
-        if (status) updates['065_status'] = status; // ACTIVE, BLOCKED
-        if (isReviewer !== undefined) updates['132_isReviewer'] = isReviewer;
-
-        await db.ref(PATH.USERS + '/' + ph).update(updates);
-        await logEmpireAction(req, "SECURITY_LOCKDOWN", ph, updates);
-        res.json({ message: "OK" });
-    } catch (e) { res.status(500).send("Lockdown Error"); }
-});
-
-// 4. Global System Toggles (Nuclear Freeze / Auto-Release)
-app.post('/api/admin/system/toggle-gate', authenticate, isMaster, async (req, res) => {
-    try {
-        const { freeze, autoRelease } = req.body;
-        const updates = {};
-        if (freeze !== undefined) updates['config/system_logic/019_nuclearFreeze'] = freeze;
-        if (autoRelease !== undefined) updates['config/verification_engine/028_autoReleaseMode'] = autoRelease;
-
-        await db.ref().update(updates);
-        await logEmpireAction(req, "SYSTEM_TOGGLE", "GLOBAL", updates);
-        res.json({ message: "OK" });
-    } catch (e) { res.status(500).send("System Error"); }
-});
-
-// 5. Staff Performance Dossier (KPI Tracking)
-app.get('/api/admin/staff/dossiers', authenticate, isMaster, async (req, res) => {
-    try {
-        const snap = await db.ref(PATH.FORENSICS + '/104_staff_dossiers').once('value');
-        res.json(snap.val() || {});
-    } catch (e) { res.status(500).send("Dossier Error"); }
-});
-
-// 6. Global Execution Feed (Forensic Log)
-app.get('/api/admin/system/forensics', authenticate, isSupport, async (req, res) => {
-    try {
-        const snap = await db.ref(PATH.FORENSICS + '/103_global_execution_feed').limitToLast(100).once('value');
-        res.json(Object.values(snap.val() || {}).reverse());
-    } catch (e) { res.status(500).send("Forensic Error"); }
-});
-
-// 7. Bulk ID Verification (Matching Engine Helper)
-app.post('/api/admin/tx/verify-bulk', authenticate, isSupport, async (req, res) => {
-    try {
-        const { refIds } = req.body; // Array of IDs
-        for (const id of refIds) {
-            await db.ref(PATH.REFS + '/approved/' + id).set({ ts: new Date().toISOString(), actor: req.user.phoneNumber });
-        }
-        res.json({ message: "Bulk Verified" });
-    } catch (e) { res.status(500).send("Bulk Error"); }
-});
-
-// 8. Financial Ledger Snapshot (Daily Sheet)
-app.get('/api/admin/finance/daily-sheet', authenticate, isMaster, async (req, res) => {
-    try {
-        const wealth = (await db.ref(PATH.LEDGER + '/096_empire_verified_wealth_usd').once('value')).val() || 0;
-        const users = (await db.ref(PATH.USERS).once('value')).val() || {};
-        const totalLiabilities = Object.values(users).reduce((s, u) => s + (parseFloat(u['064_balanceUSD']) || 0), 0);
-        res.json({ empireWealth: parseFloat(wealth), userLiabilities: totalLiabilities, netPosition: wealth - totalLiabilities });
-    } catch (e) { res.status(500).send("Ledger Error"); }
-});
-
-// --- EXISTING RESTORED APIs (UNCHANGABLE) ---
-app.get('/api/admin/transactions', authenticate, isSupport, async (req, res) => { const snap = await db.ref(PATH.TX).limitToLast(100).once('value'); res.json(snap.val() || {}); });
-app.get('/api/admin/all-users', authenticate, isSupport, async (req, res) => { const snap = await db.ref(PATH.USERS).once('value'); res.json(snap.val() || {}); });
 app.post('/api/v1/queue/update-state', authenticate, isSupport, async (req, res) => {
     const { transactionId, status } = req.body;
     const txRef = db.ref(PATH.TX + '/' + transactionId);
@@ -320,5 +270,6 @@ app.get('/api/config', async (req, res) => res.json(db ? (await db.ref('config')
 app.post('/api/v1/sup/update-config', authenticate, isMaster, async (req, res) => { if (db) await db.ref('config').update(req.body); res.json({ message: "OK" }); });
 app.post('/api/v1/sup/trust-device', authenticate, isMaster, async (req, res) => { if (!db) return res.status(503).json({ message: "Offline" }); const snap = await db.ref(PATH.DNA + '/059_pending_approval_devices/' + req.body.deviceId).once('value'); if (snap.val()) { await db.ref(PATH.DNA + '/058_trusted_devices/' + req.body.deviceId).set(snap.val()); await db.ref(PATH.DNA + '/059_pending_approval_devices/' + req.body.deviceId).remove(); res.json({ message: "OK" }); } else res.status(404).json({ message: "Device not found" }); });
 app.get('/api/v1/sup/user-dna/:phone', authenticate, isSupport, async (req, res) => { if (!db) return res.json({}); const ph = normalizePhone(req.params.phone); const profile = (await db.ref(PATH.USERS + '/' + ph).once('value')).val(); const txs = Object.values((await db.ref(PATH.TX).orderByChild('076_userId').equalTo(ph).limitToLast(10).once('value')).val() || {}); res.json({ profile, transactions: txs.reverse() }); });
+app.get('/api/admin/system/forensics', authenticate, isSupport, async (req, res) => { try { const snap = await db.ref(PATH.FORENSICS + '/103_global_execution_feed').limitToLast(100).once('value'); res.json(Object.values(snap.val() || {}).reverse()); } catch (e) { res.status(500).send("Error"); } });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 v2.5.0 SUPREME Active.`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 v2.5.1 SUPREME Active.`));
